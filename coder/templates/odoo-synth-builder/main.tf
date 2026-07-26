@@ -347,13 +347,14 @@ resource "coder_agent" "main" {
     LOG=/var/log/odoo-synth-build.log
     STATUS="failed"
     ERROR=""
+    RESOLVED_REF=""
 
     fail() { ERROR="$1"; echo "[build] ERROR: $1"; }
 
     finish() {
       TAIL="$(tail -c 12000 "$LOG" 2>/dev/null | python3 -c 'import sys,json;print(json.dumps(sys.stdin.read()))' 2>/dev/null || echo "")"
-      printf '{"status":"%s","image_uri":"%s","error":%s,"log_tail":%s}\n' \
-        "$STATUS" "$IMAGE_URI" \
+      printf '{"status":"%s","image_uri":"%s","resolved_ref":"%s","error":%s,"log_tail":%s}\n' \
+        "$STATUS" "$IMAGE_URI" "$RESOLVED_REF" \
         "$(printf '%s' "$ERROR" | python3 -c 'import sys,json;print(json.dumps(sys.stdin.read()))' 2>/dev/null || echo '""')" \
         "$TAIL" > /tmp/build-result.json
       curl -sS -X PUT -H "Content-Type: application/json" \
@@ -402,6 +403,11 @@ resource "coder_agent" "main" {
       git clone --depth 1 --quiet $${COMPONENT_REPO_REF:+--branch "$COMPONENT_REPO_REF"} \
         "$CLONE_URL" /root/ctx || { ERROR="component repo clone failed"; exit 1; }
       DOCKERFILE_PATH="$${COMPONENT_DOCKERFILE:-Dockerfile}"
+      # The CLI host can't resolve this itself for a private repo (the git
+      # token is a write-only Coder user secret, only readable here); this
+      # workspace already has it and just cloned successfully, so report the
+      # real commit back for provenance instead of the CLI's placeholder tag.
+      RESOLVED_REF="$(git -C /root/ctx rev-parse HEAD 2>/dev/null || echo "")"
     else
       # --- odoo mode: the existing context.tgz + build-args path, unchanged. -
       mkdir -p /root/ctx

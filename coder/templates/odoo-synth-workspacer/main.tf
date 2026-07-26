@@ -609,7 +609,12 @@ PYEOF
             ;;
           static)
             CDIR="$WORKSPACE/components/$NAME"; mkdir -p "$CDIR"
-            git clone --quiet "$REPO_URL" "$CDIR" >/dev/null 2>&1 || echo "[env] WARN: clone failed for $NAME"
+            # Same token-embedding as the primary addons clone above -- a
+            # bare $REPO_URL clone hangs/fails non-interactively for a
+            # private repo (git prompts for a username with no token).
+            CCLONE_URL="$REPO_URL"
+            [ -n "$GIT_TOKEN" ] && CCLONE_URL="$(printf '%s' "$REPO_URL" | sed -E "s#https://#https://x-access-token:$GIT_TOKEN@#")"
+            git clone --quiet "$CCLONE_URL" "$CDIR" >/dev/null 2>&1 || echo "[env] WARN: clone failed for $NAME"
             [ -n "$RESOLVED_REF" ] && { git -C "$CDIR" checkout --quiet "$RESOLVED_REF" 2>/dev/null || echo "[env] WARN: checkout $RESOLVED_REF failed for $NAME"; }
             (
               cd "$CDIR"
@@ -623,7 +628,9 @@ PYEOF
             ;;
           process)
             CDIR="$WORKSPACE/components/$NAME"; mkdir -p "$CDIR"
-            git clone --quiet "$REPO_URL" "$CDIR" >/dev/null 2>&1 || echo "[env] WARN: clone failed for $NAME"
+            CCLONE_URL="$REPO_URL"
+            [ -n "$GIT_TOKEN" ] && CCLONE_URL="$(printf '%s' "$REPO_URL" | sed -E "s#https://#https://x-access-token:$GIT_TOKEN@#")"
+            git clone --quiet "$CCLONE_URL" "$CDIR" >/dev/null 2>&1 || echo "[env] WARN: clone failed for $NAME"
             [ -n "$RESOLVED_REF" ] && { git -C "$CDIR" checkout --quiet "$RESOLVED_REF" 2>/dev/null || echo "[env] WARN: checkout $RESOLVED_REF failed for $NAME"; }
             (
               cd "$CDIR"

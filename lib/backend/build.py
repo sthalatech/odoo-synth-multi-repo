@@ -419,19 +419,27 @@ def _run_generic_docker_build(profile_id: str, profile: dict, component: dict,
                                emit: LogSink) -> dict:
     """Multi-repo, kind=docker (non-odoo): build the component's OWN repo +
     Dockerfile via the builder template's generic mode. Tagged by the
-    resolved commit SHA (there's no discovery_hash for a non-odoo component --
-    its own repo state IS the provenance)."""
+    resolved commit SHA when resolvable from the CLI host (public repo);
+    otherwise a build-attempt-unique tag, since a private repo's git token is
+    a write-only Coder user secret -- the CLI host can never authenticate to
+    resolve it itself (only a workspace with the token injected can, which is
+    exactly where the actual clone+build happens below). Either way the
+    builder container re-resolves the real commit SHA after it clones (it
+    has the token) and reports it back as `resolved_ref` in the build
+    result, so provenance is still recorded accurately."""
     name = component["name"]
     try:
         sha = _resolve_git_sha(component.get("repo_url", ""), component.get("repo_ref", ""))
-    except Exception as exc:  # noqa: BLE001
-        return {"exit_code": 1, "error": f"could not resolve {name} ref: {exc}"}
+        tag_suffix = sha[:12]
+    except Exception:  # noqa: BLE001
+        sha = None
+        tag_suffix = uuid.uuid4().hex[:12]
 
     registry = _ecr_registry()
     proj = config.require("PROJECT")
     repo_name = f"{proj}/{name}"
     _ensure_ecr_repo(repo_name)
-    image_uri = f"{registry}/{repo_name}:{profile_id}-{sha[:12]}"
+    image_uri = f"{registry}/{repo_name}:{profile_id}-{tag_suffix}"
     emit(f"[panel] component {name!r} target image: {image_uri}")
 
     result_put, result_get, _key = _presign_result(f"{profile_id}-{name}")
@@ -454,19 +462,29 @@ def _run_generic_docker_build(profile_id: str, profile: dict, component: dict,
     if result.get("status") != "succeeded":
         return {"exit_code": 1, "error": result.get("error") or "builder reported failure"}
     emit(f"[panel] component {name!r} image ready: {image_uri}")
-    return {"exit_code": 0, "image_uri": image_uri, "resolved_ref": sha}
+    return {"exit_code": 0, "image_uri": image_uri,
+            "resolved_ref": result.get("resolved_ref") or sha}
 
 
 def _pin_component_ref(component: dict, emit: LogSink) -> dict:
-    """Multi-repo, kind=process/static: no image to build -- just resolve
-    `repo_ref` to a concrete commit SHA so env-create clones the EXACT same
-    commit later (the same "profile binds code+data together" guarantee an
-    immutable image gives the docker/odoo components)."""
+    """Multi-repo, kind=process/static: no image to build -- best-effort
+    resolve `repo_ref` to a concrete commit SHA so workspace create clones
+    the EXACT same commit later (the same "profile binds code+data
+    together" guarantee an immutable image gives the docker/odoo
+    components). Best-effort, not fatal: a private repo's git token is a
+    write-only Coder user secret the CLI host can never read back, so this
+    unauthenticated `git ls-remote` always fails for one -- that's expected,
+    not a build failure. Workspace create clones this component fresh with
+    its own token access at that point regardless, so an unresolved ref here
+    only costs the "identical commit every time" guarantee, not the ability
+    to run at all."""
     name = component["name"]
     try:
         sha = _resolve_git_sha(component.get("repo_url", ""), component.get("repo_ref", ""))
     except Exception as exc:  # noqa: BLE001
-        return {"exit_code": 1, "error": f"could not resolve {name} ref: {exc}"}
+        emit(f"[panel] component {name!r}: could not pre-resolve ref from the CLI host "
+             f"({exc}); workspace create will resolve it fresh with its own git token access")
+        return {"exit_code": 0}
     emit(f"[panel] component {name!r} pinned at {sha[:12]} (kind={component.get('kind')}, no image built)")
     return {"exit_code": 0, "resolved_ref": sha}
 
