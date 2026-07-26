@@ -152,12 +152,19 @@ def _builder_settings() -> dict:
 
 
 def _launch_builder_workspace(image_uri: str, context_get: str, result_put: str,
-                               profile: dict, s: dict) -> str:
+                               profile: dict, odoo_component: dict, s: dict) -> str:
     """Option E: launch the build as a Coder workspace from the
-    odoo-synth-builder template. The workspace's startup_script runs the same
-    build logic (download context -> docker build
-    -> push to ECR -> PUT result JSON to S3 -> poweroff). Returns the
-    workspace name (the panel polls S3 for the result, exactly as before)."""
+    odoo-synth-builder template (build_mode=odoo, the default -- unchanged
+    from before multi-repo support). The workspace's startup_script runs the
+    same build logic (download context -> docker build -> push to ECR -> PUT
+    result JSON to S3 -> poweroff). Returns the workspace name (the panel
+    polls S3 for the result, exactly as before).
+
+    odoo_component is profiles.components_of(profile)'s "odoo" entry --
+    repo_url/ref/odoo.* live there, not on the top-level profile dict, for a
+    multi-repo profile (components_of() synthesizes them from the flat
+    fields for a legacy single-repo profile, so this is the same call either
+    way)."""
     import os
     import subprocess
 
@@ -180,8 +187,8 @@ def _launch_builder_workspace(image_uri: str, context_get: str, result_put: str,
     # longer build a project-level odoo:latest base at install time.
     base = s.get("odoo_image_base") or "odoo:17"
     deps = " ".join(profile.get("python_deps") or [])
-    odoo_ref = (profile.get("odoo_git_ref")
-                or profile.get("odoo_series") or "")
+    odoo_cfg = odoo_component.get("odoo") or {}
+    odoo_ref = odoo_cfg.get("odoo_git_ref") or odoo_cfg.get("odoo_series") or ""
     params = [
         ("ami_id", s.get("ami_id") or ""),
         ("instance_profile", s.get("instance_profile") or ""),
@@ -193,11 +200,11 @@ def _launch_builder_workspace(image_uri: str, context_get: str, result_put: str,
         ("context_get_url", context_get),
         ("result_put_url", result_put),
         ("odoo_image_base", base),
-        ("odoo_git_url", profile.get("odoo_git_url")
+        ("odoo_git_url", odoo_cfg.get("odoo_git_url")
          or "https://github.com/odoo/odoo"),
         ("odoo_git_ref", odoo_ref),
-        ("custom_addons_git_url", profile.get("addons_git_url") or ""),
-        ("custom_addons_git_ref", profile.get("addons_git_ref") or ""),
+        ("custom_addons_git_url", odoo_component.get("repo_url") or ""),
+        ("custom_addons_git_ref", odoo_component.get("repo_ref") or ""),
         ("python_deps", deps),
         # The git token is a Coder user secret injected into the workspace as
         # $GH_PAT_<UPPER_ID>; pass the env-var NAME (not the value) so the
@@ -213,6 +220,77 @@ def _launch_builder_workspace(image_uri: str, context_get: str, result_put: str,
     subprocess.run(["coder", *args], env={**os.environ, **_coder_env()},
                    check=True, capture_output=True, text=True, timeout=120)
     return ws_name
+
+
+def _launch_builder_workspace_generic(image_uri: str, result_put: str,
+                                       component: dict, profile: dict, s: dict) -> str:
+    """Multi-repo: launch the SAME odoo-synth-builder template in
+    build_mode=generic -- clones `component`'s own repo and builds its own
+    Dockerfile directly, no context.tgz/build-args/enterprise handling."""
+    import os
+    import subprocess
+
+    missing = [k for k in ("ami_id", "security_group_id", "instance_profile", "subnet_id")
+               if not s.get(k)]
+    if missing:
+        raise RuntimeError(
+            f"builder launch settings missing from config: {', '.join(missing)}. "
+            "These come from deploy/state.env (written by deploy/09_dev_env.sh "
+            "and 11_coder_server.sh): ENV_AMI_ID, ENV_SG_ID, ENV_SUBNET_ID, "
+            "ENV_INSTANCE_PROFILE. Run the deploy pipeline first (bash deploy/00_setup.sh).")
+
+    docker_cfg = component.get("docker") or {}
+    params = [
+        ("ami_id", s.get("ami_id") or ""),
+        ("instance_profile", s.get("instance_profile") or ""),
+        ("subnet_id", s.get("subnet_id") or ""),
+        ("security_group_id", s.get("security_group_id") or ""),
+        ("region", _region()),
+        ("instance_type", s.get("instance_type") or "m5.xlarge"),
+        ("image_uri", image_uri),
+        ("result_put_url", result_put),
+        ("build_mode", "generic"),
+        ("component_repo_url", component.get("repo_url") or ""),
+        ("component_repo_ref", component.get("repo_ref") or ""),
+        ("component_dockerfile", docker_cfg.get("dockerfile") or "Dockerfile"),
+        ("git_token_env", profiles.git_token_env_name(profile.get("id") or "")
+         if profile.get("git_token_secret") else ""),
+        ("issue", f"{profile.get('id') or ''}-{component.get('name') or ''}"),
+    ]
+    ws_name = f"build-{component.get('name', 'c')}-{uuid.uuid4().hex[:8]}"
+    args = ["create", "-t", BUILDER_TEMPLATE, "-y", "--no-wait", ws_name]
+    for k, v in params:
+        args += ["--parameter", f"{k}={v}"]
+    subprocess.run(["coder", *args], env={**os.environ, **_coder_env()},
+                   check=True, capture_output=True, text=True, timeout=120)
+    return ws_name
+
+
+def _resolve_git_sha(repo_url: str, ref: str) -> str:
+    """Resolve `ref` (branch/tag/HEAD) on `repo_url` to a concrete commit SHA
+    via `git ls-remote`, for image tags (generic docker components) and
+    provenance pinning (process/static components) -- no local clone needed."""
+    import subprocess
+
+    out = subprocess.run(
+        ["git", "ls-remote", repo_url, ref or "HEAD"],
+        check=True, capture_output=True, text=True, timeout=30).stdout
+    line = out.strip().splitlines()[0] if out.strip() else ""
+    sha = line.split("\t")[0].strip() if line else ""
+    if not sha:
+        raise RuntimeError(f"could not resolve ref {ref!r} on {repo_url!r}")
+    return sha
+
+
+def _ensure_ecr_repo(repo_name: str) -> None:
+    """Idempotent: create the ECR repo if it doesn't exist yet. Needed for a
+    multi-repo component's own <project>/<component-name> repo, which (unlike
+    odoo/masker/discovery) isn't pre-created by deploy/01_ecr.sh."""
+    ecr = boto3.client("ecr", region_name=_region())
+    try:
+        ecr.create_repository(repositoryName=repo_name)
+    except ecr.exceptions.RepositoryAlreadyExistsException:
+        pass
 
 
 def _delete_builder_workspace(ws_name: str, emit: LogSink) -> None:
@@ -244,12 +322,12 @@ def _poll_result(get_url: str, emit: LogSink, timeout_s: int = 45 * 60) -> Optio
     return None
 
 
-def run_build(profile_id: str, emit: LogSink, run_id: str | None = None) -> dict:
-    """Blocking: package context, launch the ephemeral builder, poll for its
-    result, and fold the immutable image into the profile."""
-    profile = store.get_profile(profile_id)
-    if not profile:
-        raise KeyError(profile_id)
+def _run_odoo_build(profile_id: str, profile: dict, odoo_component: dict,
+                     emit: LogSink) -> dict:
+    """The odoo component's build: unchanged from before multi-repo support --
+    package odoo/ context, launch the builder in build_mode=odoo, poll, fold
+    the immutable image into the profile's top-level image_uri/image_status/
+    image_history (same fields a legacy single-repo profile has always used)."""
     dhash = profile.get("discovery_hash")
     if not dhash:
         raise ValueError("run discovery first (no discovery_hash on the profile)")
@@ -261,8 +339,10 @@ def run_build(profile_id: str, emit: LogSink, run_id: str | None = None) -> dict
     store.update_profile(profile_id, image_status="building", error=None)
 
     emit("[panel] packaging odoo/ build context ...")
-    include_ent = bool(profile.get("needs_enterprise")) and _have_enterprise_zip()
-    if profile.get("needs_enterprise") and not include_ent:
+    needs_enterprise = bool((odoo_component.get("odoo") or {}).get("needs_enterprise")
+                            or profile.get("needs_enterprise"))
+    include_ent = needs_enterprise and _have_enterprise_zip()
+    if needs_enterprise and not include_ent:
         emit("[panel] NOTE profile needs enterprise but odoo/enterprise.zip is not "
              "present; the image will build without enterprise addons.")
     context_get, context_uri = _upload_context(profile_id, include_enterprise=include_ent)
@@ -272,7 +352,7 @@ def run_build(profile_id: str, emit: LogSink, run_id: str | None = None) -> dict
     emit(f"[panel] launching Coder builder workspace ({s['instance_type']}) ...")
     try:
         iid = _launch_builder_workspace(image_uri, context_get, result_put,
-                                        profile, s)
+                                        profile, odoo_component, s)
     except Exception as exc:  # noqa: BLE001
         store.update_profile(profile_id, image_status="failed", error=str(exc))
         raise
@@ -311,6 +391,115 @@ def run_build(profile_id: str, emit: LogSink, run_id: str | None = None) -> dict
     )
     emit(f"[panel] image ready: {image_uri}")
     return {"exit_code": 0, "image_uri": image_uri, "context_uri": context_uri}
+
+
+def _run_generic_docker_build(profile_id: str, profile: dict, component: dict,
+                               emit: LogSink) -> dict:
+    """Multi-repo, kind=docker (non-odoo): build the component's OWN repo +
+    Dockerfile via the builder template's generic mode. Tagged by the
+    resolved commit SHA (there's no discovery_hash for a non-odoo component --
+    its own repo state IS the provenance)."""
+    name = component["name"]
+    try:
+        sha = _resolve_git_sha(component.get("repo_url", ""), component.get("repo_ref", ""))
+    except Exception as exc:  # noqa: BLE001
+        return {"exit_code": 1, "error": f"could not resolve {name} ref: {exc}"}
+
+    registry = _ecr_registry()
+    proj = config.require("PROJECT")
+    repo_name = f"{proj}/{name}"
+    _ensure_ecr_repo(repo_name)
+    image_uri = f"{registry}/{repo_name}:{profile_id}-{sha[:12]}"
+    emit(f"[panel] component {name!r} target image: {image_uri}")
+
+    result_put, result_get, _key = _presign_result(f"{profile_id}-{name}")
+    s = _builder_settings()
+    emit(f"[panel] launching Coder builder workspace for {name!r} ({s['instance_type']}) ...")
+    try:
+        iid = _launch_builder_workspace_generic(image_uri, result_put, component, profile, s)
+    except Exception as exc:  # noqa: BLE001
+        return {"exit_code": 1, "error": str(exc)}
+    emit(f"[panel] builder workspace {iid} launched; waiting for {name!r} build+push ...")
+
+    result = _poll_result(result_get, emit)
+    _delete_builder_workspace(iid, emit)
+    if not result:
+        return {"exit_code": 1, "error": "builder timed out (no result)"}
+    tail = result.get("log_tail") or ""
+    if tail:
+        for ln in tail.splitlines()[-40:]:
+            emit(ln)
+    if result.get("status") != "succeeded":
+        return {"exit_code": 1, "error": result.get("error") or "builder reported failure"}
+    emit(f"[panel] component {name!r} image ready: {image_uri}")
+    return {"exit_code": 0, "image_uri": image_uri, "resolved_ref": sha}
+
+
+def _pin_component_ref(component: dict, emit: LogSink) -> dict:
+    """Multi-repo, kind=process/static: no image to build -- just resolve
+    `repo_ref` to a concrete commit SHA so env-create clones the EXACT same
+    commit later (the same "profile binds code+data together" guarantee an
+    immutable image gives the docker/odoo components)."""
+    name = component["name"]
+    try:
+        sha = _resolve_git_sha(component.get("repo_url", ""), component.get("repo_ref", ""))
+    except Exception as exc:  # noqa: BLE001
+        return {"exit_code": 1, "error": f"could not resolve {name} ref: {exc}"}
+    emit(f"[panel] component {name!r} pinned at {sha[:12]} (kind={component.get('kind')}, no image built)")
+    return {"exit_code": 0, "resolved_ref": sha}
+
+
+def run_build(profile_id: str, emit: LogSink, run_id: str | None = None) -> dict:
+    """Blocking: build the odoo component exactly as before (top-level
+    image_uri/image_status/image_history, unchanged for a legacy single-repo
+    profile), then build/pin every other component. A non-odoo component's
+    failure is recorded on that component and surfaced, but does not fail
+    the whole run -- the odoo image (if it succeeded) is still usable."""
+    profile = store.get_profile(profile_id)
+    if not profile:
+        raise KeyError(profile_id)
+
+    components = profiles.components_of(profile)
+    odoo_component = next((c for c in components if c.get("kind") == "odoo"), None)
+    if odoo_component is None:
+        raise ValueError("profile has no odoo component")
+    odoo_result = _run_odoo_build(profile_id, profile, odoo_component, emit)
+    if odoo_result.get("exit_code") != 0:
+        return odoo_result
+
+    non_odoo = [c for c in components if c.get("kind") != "odoo"]
+    if non_odoo:
+        component_results: dict[str, dict] = {}
+        for c in non_odoo:
+            if c.get("kind") == "docker":
+                component_results[c["name"]] = _run_generic_docker_build(profile_id, profile, c, emit)
+            else:  # process | static
+                component_results[c["name"]] = _pin_component_ref(c, emit)
+
+        # merge each component's build result back onto profile.components,
+        # matched by name (mirrors how discovery merges its wiring plan).
+        merged = []
+        for c in (profile.get("components") or []):
+            c = dict(c)
+            r = component_results.get(c.get("name"))
+            if r:
+                c["built"] = {
+                    "exit_code": r.get("exit_code"),
+                    "image_uri": r.get("image_uri"),
+                    "resolved_ref": r.get("resolved_ref"),
+                    "error": r.get("error"),
+                    "built_at": time.time(),
+                }
+            merged.append(c)
+        store.update_profile(profile_id, components=merged)
+
+        failed = [n for n, r in component_results.items() if r.get("exit_code") != 0]
+        if failed:
+            emit(f"[panel] WARN: component build/pin failed for: {', '.join(failed)} "
+                 f"(odoo image is still ready; see profile show for per-component errors)")
+        odoo_result["components"] = component_results
+
+    return odoo_result
 
 
 # ---------------------------------------------------------------------------

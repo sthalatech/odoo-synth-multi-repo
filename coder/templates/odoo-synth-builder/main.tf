@@ -24,6 +24,15 @@
 # subnet via data.aws_subnets, env SG by name) so `coder create` needs no infra
 # params -- only the build-specific ones (image URI, context/result URLs,
 # provenance refs, git token secret).
+#
+# Multi-repo: `build_mode` (default "odoo") selects between the odoo-specific
+# path above (context.tgz + ODOO_*/CUSTOM_ADDONS_* build-args) and "generic"
+# mode, which clones a multi-repo profile's OWN kind=docker component repo
+# (component_repo_url/ref) and builds THAT repo's own Dockerfile directly --
+# no context tarball, no build-args, no enterprise handling. Same builder
+# infra either way (one template, not a separate one per mode), since the
+# surrounding skeleton (AMI, ECR login, poweroff, result reporting) is
+# identical -- only the "how do I get a build context" step differs.
 
 terraform {
   required_providers {
@@ -259,6 +268,46 @@ data "coder_parameter" "issue" {
   order        = 17
 }
 
+# --- multi-repo: build a component's OWN repo (kind: docker), rather than the
+# fixed odoo/ context tarball above. build_mode="generic" skips the odoo-
+# specific context download/enterprise-unzip/build-arg dance entirely --
+# it just clones component_repo_url@ref and builds THAT repo's own Dockerfile.
+data "coder_parameter" "build_mode" {
+  name         = "build_mode"
+  type         = "string"
+  display_name = "Build mode: odoo (context.tgz + build-args) or generic (component's own repo+Dockerfile)"
+  default      = "odoo"
+  icon         = "/icon/docker.svg"
+  order        = 18
+}
+
+data "coder_parameter" "component_repo_url" {
+  name         = "component_repo_url"
+  type         = "string"
+  display_name = "generic mode: component repo git URL"
+  default      = ""
+  icon         = "/icon/github.svg"
+  order        = 19
+}
+
+data "coder_parameter" "component_repo_ref" {
+  name         = "component_repo_ref"
+  type         = "string"
+  display_name = "generic mode: component repo git ref"
+  default      = ""
+  icon         = "/icon/github.svg"
+  order        = 20
+}
+
+data "coder_parameter" "component_dockerfile" {
+  name         = "component_dockerfile"
+  type         = "string"
+  display_name = "generic mode: Dockerfile path within the component repo"
+  default      = "Dockerfile"
+  icon         = "/icon/docker.svg"
+  order        = 21
+}
+
 # ---------- the workspace ---------------------------------------------------
 
 data "coder_workspace" "me" {}
@@ -290,6 +339,10 @@ resource "coder_agent" "main" {
     CUSTOM_ADDONS_GIT_REF="${data.coder_parameter.custom_addons_git_ref.value}"
     PYTHON_DEPS="${data.coder_parameter.python_deps.value}"
     GIT_TOKEN_ENV="${data.coder_parameter.git_token_env.value}"
+    BUILD_MODE="${data.coder_parameter.build_mode.value}"
+    COMPONENT_REPO_URL="${data.coder_parameter.component_repo_url.value}"
+    COMPONENT_REPO_REF="${data.coder_parameter.component_repo_ref.value}"
+    COMPONENT_DOCKERFILE="${data.coder_parameter.component_dockerfile.value}"
 
     LOG=/var/log/odoo-synth-build.log
     STATUS="failed"
@@ -322,58 +375,82 @@ resource "coder_agent" "main" {
     command -v aws    >/dev/null 2>&1 || { ERROR="aws cli not found on the AMI; bake the golden AMI via deploy/09_dev_env.sh first"; exit 1; }
     export DOCKER_BUILDKIT=1
 
-    # --- fetch the build context ------------------------------------------
-    mkdir -p /root/ctx
-    echo "[build] downloading build context ..."
-    curl -fsSL "$CONTEXT_GET_URL" -o /root/ctx.tgz || { ERROR="could not download build context"; exit 1; }
-    tar xzf /root/ctx.tgz -C /root/ctx || { ERROR="could not extract build context"; exit 1; }
-    mkdir -p /root/ctx/enterprise /root/ctx/custom-addons
-    touch /root/ctx/enterprise/.gitkeep /root/ctx/custom-addons/.gitkeep
-    # Bake enterprise addons from the bundled odoo/enterprise.zip (included in
-    # the context only when the profile needs enterprise). Flatten a single
-    # top-level wrapper dir so module folders land directly under enterprise/.
-    if [ -f /root/ctx/enterprise.zip ]; then
-      echo "[build] unzipping enterprise.zip into enterprise/ ..."
-      etmp="$(mktemp -d)"; unzip -q -o /root/ctx/enterprise.zip -d "$etmp"
-      einner="$etmp"
-      if [ "$(find "$etmp" -maxdepth 1 -mindepth 1 -type d | wc -l)" = "1" ]          && [ -z "$(find "$etmp" -maxdepth 1 -type f)" ]; then
-        einner="$(find "$etmp" -maxdepth 1 -mindepth 1 -type d)"
-      fi
-      rm -rf /root/ctx/enterprise; mkdir -p /root/ctx/enterprise
-      cp -a "$einner/." /root/ctx/enterprise/
-      rm -rf "$etmp" /root/ctx/enterprise.zip
-      echo "[build] enterprise modules staged: $(find /root/ctx/enterprise -maxdepth 1 -mindepth 1 -type d | wc -l)"
-    fi
-
-    # --- resolve git token for private addons clone ----------------------
+    # --- resolve git token (shared by both modes) --------------------------
     # The token is a Coder user secret injected into the workspace as
     # $GH_PAT_<UPPER_ID> (the name is passed in GIT_TOKEN_ENV). Coder
     # injects it into the agent env; we write it to a file for the BuildKit
-    # --secret mount the Dockerfile uses. No AWS Secrets Manager round-trip.
+    # --secret mount (odoo mode's Dockerfile) or embed it in the clone URL
+    # (generic mode). No AWS Secrets Manager round-trip.
     GH_TOKEN_FILE="$(mktemp)"; chmod 600 "$GH_TOKEN_FILE"
     if [ -n "$GIT_TOKEN_ENV" ]; then
       printf '%s' "$${!GIT_TOKEN_ENV:-}" > "$GH_TOKEN_FILE" 2>/dev/null || true
     fi
-    [ -s "$GH_TOKEN_FILE" ] && echo "[build] git token resolved from $${GIT_TOKEN_ENV:-} (Coder user secret)" \
-      || echo "[build] no git token (public addons or none)"
+    GH_TOKEN_VAL=""
+    [ -s "$GH_TOKEN_FILE" ] && GH_TOKEN_VAL="$(cat "$GH_TOKEN_FILE")"
+    [ -n "$GH_TOKEN_VAL" ] && echo "[build] git token resolved from $${GIT_TOKEN_ENV:-} (Coder user secret)" \
+      || echo "[build] no git token (public repo or none)"
 
-    # --- ECR login ---------------------------------------------------------
+    DOCKERFILE_PATH="Dockerfile"
+    if [ "$BUILD_MODE" = "generic" ]; then
+      # --- multi-repo: build a component's OWN repo + Dockerfile, no odoo-
+      # specific context tarball or build-args at all. ---------------------
+      echo "[build] cloning component repo $COMPONENT_REPO_URL @ $${COMPONENT_REPO_REF:-default} ..."
+      CLONE_URL="$COMPONENT_REPO_URL"
+      if [ -n "$GH_TOKEN_VAL" ] && [ "$${COMPONENT_REPO_URL#https://}" != "$COMPONENT_REPO_URL" ]; then
+        CLONE_URL="$(echo "$COMPONENT_REPO_URL" | sed "s#https://#https://x-access-token:$${GH_TOKEN_VAL}@#")"
+      fi
+      git clone --depth 1 --quiet $${COMPONENT_REPO_REF:+--branch "$COMPONENT_REPO_REF"} \
+        "$CLONE_URL" /root/ctx || { ERROR="component repo clone failed"; exit 1; }
+      DOCKERFILE_PATH="$${COMPONENT_DOCKERFILE:-Dockerfile}"
+    else
+      # --- odoo mode: the existing context.tgz + build-args path, unchanged. -
+      mkdir -p /root/ctx
+      echo "[build] downloading build context ..."
+      curl -fsSL "$CONTEXT_GET_URL" -o /root/ctx.tgz || { ERROR="could not download build context"; exit 1; }
+      tar xzf /root/ctx.tgz -C /root/ctx || { ERROR="could not extract build context"; exit 1; }
+      mkdir -p /root/ctx/enterprise /root/ctx/custom-addons
+      touch /root/ctx/enterprise/.gitkeep /root/ctx/custom-addons/.gitkeep
+      # Bake enterprise addons from the bundled odoo/enterprise.zip (included in
+      # the context only when the profile needs enterprise). Flatten a single
+      # top-level wrapper dir so module folders land directly under enterprise/.
+      if [ -f /root/ctx/enterprise.zip ]; then
+        echo "[build] unzipping enterprise.zip into enterprise/ ..."
+        etmp="$(mktemp -d)"; unzip -q -o /root/ctx/enterprise.zip -d "$etmp"
+        einner="$etmp"
+        if [ "$(find "$etmp" -maxdepth 1 -mindepth 1 -type d | wc -l)" = "1" ]            && [ -z "$(find "$etmp" -maxdepth 1 -type f)" ]; then
+          einner="$(find "$etmp" -maxdepth 1 -mindepth 1 -type d)"
+        fi
+        rm -rf /root/ctx/enterprise; mkdir -p /root/ctx/enterprise
+        cp -a "$einner/." /root/ctx/enterprise/
+        rm -rf "$etmp" /root/ctx/enterprise.zip
+        echo "[build] enterprise modules staged: $(find /root/ctx/enterprise -maxdepth 1 -mindepth 1 -type d | wc -l)"
+      fi
+    fi
+
+    # --- ECR login (both modes) --------------------------------------------
     REGISTRY="$(echo "$IMAGE_URI" | cut -d/ -f1)"
     echo "[build] logging in to ECR $REGISTRY ..."
     aws ecr get-login-password --region "$REGION" \
       | docker login --username AWS --password-stdin "$REGISTRY" || { ERROR="ECR login failed"; exit 1; }
 
     # --- build -------------------------------------------------------------
-    echo "[build] building image $IMAGE_URI (python_deps: $${PYTHON_DEPS:-none}) ..."
-    docker build --platform linux/amd64 \
-      --build-arg ODOO_IMAGE="$ODOO_IMAGE_BASE" \
-      --build-arg ODOO_GIT_URL="$ODOO_GIT_URL" \
-      --build-arg ODOO_GIT_REF="$ODOO_GIT_REF" \
-      --build-arg CUSTOM_ADDONS_GIT_URL="$CUSTOM_ADDONS_GIT_URL" \
-      --build-arg CUSTOM_ADDONS_GIT_REF="$CUSTOM_ADDONS_GIT_REF" \
-      --build-arg PYTHON_DEPS="$PYTHON_DEPS" \
-      --secret id=gh_token,src="$GH_TOKEN_FILE" \
-      -t "$IMAGE_URI" /root/ctx || { ERROR="docker build failed"; exit 1; }
+    if [ "$BUILD_MODE" = "generic" ]; then
+      echo "[build] building image $IMAGE_URI (component Dockerfile: $DOCKERFILE_PATH) ..."
+      docker build --platform linux/amd64 \
+        -f "/root/ctx/$DOCKERFILE_PATH" \
+        -t "$IMAGE_URI" /root/ctx || { ERROR="docker build failed"; exit 1; }
+    else
+      echo "[build] building image $IMAGE_URI (python_deps: $${PYTHON_DEPS:-none}) ..."
+      docker build --platform linux/amd64 \
+        --build-arg ODOO_IMAGE="$ODOO_IMAGE_BASE" \
+        --build-arg ODOO_GIT_URL="$ODOO_GIT_URL" \
+        --build-arg ODOO_GIT_REF="$ODOO_GIT_REF" \
+        --build-arg CUSTOM_ADDONS_GIT_URL="$CUSTOM_ADDONS_GIT_URL" \
+        --build-arg CUSTOM_ADDONS_GIT_REF="$CUSTOM_ADDONS_GIT_REF" \
+        --build-arg PYTHON_DEPS="$PYTHON_DEPS" \
+        --secret id=gh_token,src="$GH_TOKEN_FILE" \
+        -t "$IMAGE_URI" /root/ctx || { ERROR="docker build failed"; exit 1; }
+    fi
 
     echo "[build] pushing $IMAGE_URI ..."
     docker push "$IMAGE_URI" || { ERROR="docker push failed"; exit 1; }
