@@ -298,10 +298,17 @@ def create(source_run_id: Optional[str], issue: Optional[str],
             dest_conn = {"host": "127.0.0.1", "port": 5432,
                          "dbname": s.get("db_name") or "odoo",
                          "user": "odoo", "password": "odoo"}
+            # This workspace's own local Odoo -- a fixed target (like
+            # dest_conn above), not per-profile discovered: every workspace
+            # runs Odoo on 127.0.0.1:18069 with the masker's admin/admin
+            # login reset, against this same dest_conn database.
+            odoo_conn = {"host": "127.0.0.1", "port": 18069, "scheme": "http",
+                         "dbname": dest_conn["dbname"], "login": "admin",
+                         "password": config.get("ODOO_ADMIN_PASSWORD", "admin")}
             resolved_components = []
             for c in non_odoo:
                 env_pairs = list(component_env.resolve_component_env(
-                    c, dest_conn, port_table, dependency_conn).items())
+                    c, dest_conn, port_table, dependency_conn, odoo_conn).items())
                 env_get_url, env_keys = (
                     pipeline._upload_env_file(env_pairs) if env_pairs else ("", []))
                 built = c.get("built") or {}

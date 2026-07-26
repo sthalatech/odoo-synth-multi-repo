@@ -65,6 +65,22 @@ def _resolve_db_value(field: str, dest_conn: dict) -> str:
     return ""
 
 
+def _resolve_odoo_value(field: str, odoo_conn: dict) -> str:
+    if field == "host":
+        return odoo_conn.get("host", "localhost")
+    if field == "port":
+        return str(odoo_conn.get("port", ""))
+    if field == "scheme":
+        return odoo_conn.get("scheme", "http")
+    if field == "dbname":
+        return odoo_conn.get("dbname", "")
+    if field == "login":
+        return odoo_conn.get("login", "admin")
+    if field == "password":
+        return odoo_conn.get("password", "")
+    return ""
+
+
 def _resolve_url_shaped(as_kind: str, host: str, port, scheme: str = "http") -> str:
     if as_kind == "host":
         return host
@@ -77,22 +93,28 @@ def _resolve_url_shaped(as_kind: str, host: str, port, scheme: str = "http") -> 
 
 def resolve_component_env(component: dict[str, Any], dest_conn: dict,
                           port_table: dict[str, int],
-                          dependency_conn: dict[str, dict]) -> dict[str, str]:
+                          dependency_conn: dict[str, dict],
+                          odoo_conn: dict | None = None) -> dict[str, str]:
     """A component's fully-resolved env vars: db-bucket vars point at the
-    shared local DB, peer-bucket vars point at another component's assigned
-    port, shared_infra-bucket vars point at a provisioned dependency,
-    own_port confirms the component's own port. "external" vars are never
-    auto-filled -- only present if the operator supplied env.overrides for
-    them. overrides always win, for every bucket (an operator can force any
-    value, including one auto-wiring would have produced differently)."""
+    shared local DB, odoo-bucket vars point at this workspace's own local
+    Odoo (a fixed target, like the db bucket -- not discovered per-profile),
+    peer-bucket vars point at another component's assigned port,
+    shared_infra-bucket vars point at a provisioned dependency, own_port
+    confirms the component's own port. "external" vars are never auto-filled
+    -- only present if the operator supplied env.overrides for them.
+    overrides always win, for every bucket (an operator can force any value,
+    including one auto-wiring would have produced differently)."""
     wiring_plan = ((component.get("discovered") or {}).get("wiring_plan")) or {}
     overrides = ((component.get("env") or {}).get("overrides")) or {}
+    odoo_conn = odoo_conn or {}
 
     resolved: dict[str, str] = {}
     for key, info in wiring_plan.items():
         bucket = info.get("bucket")
         if bucket == "db":
             resolved[key] = _resolve_db_value(info.get("field", ""), dest_conn)
+        elif bucket == "odoo":
+            resolved[key] = _resolve_odoo_value(info.get("field", ""), odoo_conn)
         elif bucket == "peer":
             target_port = port_table.get(info.get("target"))
             if target_port is not None:

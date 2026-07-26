@@ -35,6 +35,17 @@ _DB_FIELD_MAP = {
 }
 _DB_DSN_RE = re.compile(r"^(DATABASE|POSTGRES|PG)_?(URL|DSN)$")
 
+# Odoo is a fixed, universal target every component may need to reach (same
+# category as the DB bucket, not a "peer" -- the odoo component has no
+# assigned `port` in port_table, since it's baked into the AMI on a fixed
+# port rather than platform-assigned like other components). Exact-name
+# lookup, same shape as _DB_FIELD_MAP.
+_ODOO_FIELD_MAP = {
+    "ODOO_HOST": "host", "ODOO_PORT": "port", "ODOO_PROTOCOL": "scheme",
+    "ODOO_DB": "dbname", "ODOO_LOGIN": "login", "ODOO_USER": "login",
+    "ODOO_USERNAME": "login", "ODOO_PASSWORD": "password",
+}
+
 _LOOPBACK_HOSTS = {"localhost", "127.0.0.1", "0.0.0.0", "::1"}
 
 
@@ -237,7 +248,7 @@ def classify_component_env(
       any developer's local env.
     dependency_names: {dependency_name: dependency_kind}, e.g. {"redis": "redis"}.
 
-    Buckets: db | peer | shared_infra | own_port | external.
+    Buckets: db | odoo | peer | shared_infra | own_port | external.
     """
     plan: dict[str, dict] = {}
     own_port = port_table.get(component_name)
@@ -258,6 +269,13 @@ def classify_component_env(
             continue
         if _DB_DSN_RE.match(upper):
             plan[key] = {"bucket": "db", "field": "dsn"}
+            continue
+
+        # 1b. odoo bucket -- exact well-known Odoo connection var names.
+        # Fixed target (every workspace's own local Odoo), not discovered
+        # from port_table -- same posture as the db bucket above.
+        if upper in _ODOO_FIELD_MAP:
+            plan[key] = {"bucket": "odoo", "field": _ODOO_FIELD_MAP[upper]}
             continue
 
         # 2. peer bucket via STRICT name-prefix match (HOST/PORT/URL-style
