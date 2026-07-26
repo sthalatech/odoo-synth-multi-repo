@@ -440,14 +440,6 @@ ${BOLD}3. Mask${OFF} the source DB -> masked pg_dump in S3:
 ${BOLD}4. Launch a dev workspace${OFF} (one Coder workspace per GitHub issue):
     odoo-synth workspace create --profile-id <id> --issue <num> --repo-url <url>
 
-${BOLD}5. Pulled new discovery/masker code (e.g. discovery/*.py, masker/entrypoint.sh)?${OFF}
-   \`git pull\` alone does NOT update what's running -- \`profile discover\`/
-   \`profile mask\` pull a prebuilt image from ECR (tagged :latest), so a code
-   change has no effect until you rebuild + push it:
-    bash deploy/02_build_push.sh
-   (odoo-synth-builder/-workspacer Coder templates are separate; republish
-   those with deploy/12_publish_template.sh after changing their main.tf)
-
 Re-run ${BOLD}bash deploy/00_setup.sh${OFF} anytime to reconfigure or re-provision.
 NEXT
 ok "done."
