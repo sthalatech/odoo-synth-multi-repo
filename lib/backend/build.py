@@ -212,6 +212,16 @@ def _launch_builder_workspace(image_uri: str, context_get: str, result_put: str,
         ("git_token_env", profiles.git_token_env_name(profile.get("id") or "")
          if profile.get("git_token_secret") else ""),
         ("issue", profile.get("id") or ""),
+        # Multi-repo build_mode params -- unused on this (odoo) path, but must
+        # still be passed explicitly: `coder create` falls back to prompting
+        # interactively for EVERY declared parameter (not just the unset
+        # ones) if even one coder_parameter is left unsupplied, which hangs
+        # forever with no TTY attached. _launch_builder_workspace_generic
+        # already supplies these for the generic path.
+        ("build_mode", "odoo"),
+        ("component_repo_url", ""),
+        ("component_repo_ref", ""),
+        ("component_dockerfile", ""),
     ]
     ws_name = f"build-{uuid.uuid4().hex[:8]}"
     args = ["create", "-t", BUILDER_TEMPLATE, "-y", "--no-wait", ws_name]
@@ -256,6 +266,18 @@ def _launch_builder_workspace_generic(image_uri: str, result_put: str,
         ("git_token_env", profiles.git_token_env_name(profile.get("id") or "")
          if profile.get("git_token_secret") else ""),
         ("issue", f"{profile.get('id') or ''}-{component.get('name') or ''}"),
+        # Odoo-path params -- unused in generic mode, but must still be passed
+        # explicitly for the same reason _launch_builder_workspace passes the
+        # generic-mode params on the odoo path: `coder create` falls back to
+        # prompting interactively for EVERY declared parameter if even one is
+        # left unsupplied, which hangs forever with no TTY attached.
+        ("context_get_url", ""),
+        ("odoo_image_base", ""),
+        ("odoo_git_url", ""),
+        ("odoo_git_ref", ""),
+        ("custom_addons_git_url", ""),
+        ("custom_addons_git_ref", ""),
+        ("python_deps", ""),
     ]
     ws_name = f"build-{component.get('name', 'c')}-{uuid.uuid4().hex[:8]}"
     args = ["create", "-t", BUILDER_TEMPLATE, "-y", "--no-wait", ws_name]
