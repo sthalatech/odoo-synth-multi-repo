@@ -20,11 +20,18 @@ _HOST_SUFFIXES = ("_HOST", "_HOSTNAME")
 _PORT_SUFFIXES = ("_PORT",)
 _URL_SUFFIXES = ("_URL", "_DOMAIN", "_BASE_URL", "_ENDPOINT")
 
-_DB_KEYS = {
-    "DB_HOST", "DB_PORT", "DB_NAME", "DB_USER", "DB_USERNAME",
-    "DB_PASSWORD", "DB_PASS",
-    "POSTGRES_HOST", "POSTGRES_PORT", "POSTGRES_DB", "POSTGRES_USER",
-    "POSTGRES_PASSWORD",
+# key name -> which field of the shared DB connection it holds. Drives
+# env-create's resolution (host/port/dbname/user/password/dsn), not just
+# discovery's classification -- this IS the full DB bucket vocabulary, a
+# closed set (unlike peer/shared_infra, which are open-ended by component/
+# dependency name), so a direct lookup table is clearer than more pattern
+# matching.
+_DB_FIELD_MAP = {
+    "DB_HOST": "host", "POSTGRES_HOST": "host",
+    "DB_PORT": "port", "POSTGRES_PORT": "port",
+    "DB_NAME": "dbname", "POSTGRES_DB": "dbname",
+    "DB_USER": "user", "DB_USERNAME": "user", "POSTGRES_USER": "user",
+    "DB_PASSWORD": "password", "DB_PASS": "password", "POSTGRES_PASSWORD": "password",
 }
 _DB_DSN_RE = re.compile(r"^(DATABASE|POSTGRES|PG)_?(URL|DSN)$")
 
@@ -178,8 +185,14 @@ def classify_component_env(
         loop_port = _parse_url_loopback_port(value)
 
         # 1. DB bucket -- exact well-known DB var names, or a single DSN var.
-        if upper in _DB_KEYS or _DB_DSN_RE.match(upper):
-            plan[key] = {"bucket": "db"}
+        # `field` says which part of the connection this key holds (env-create
+        # needs this to resolve a concrete value; "dsn" means the whole
+        # postgresql://... URL rather than one field).
+        if upper in _DB_FIELD_MAP:
+            plan[key] = {"bucket": "db", "field": _DB_FIELD_MAP[upper]}
+            continue
+        if _DB_DSN_RE.match(upper):
+            plan[key] = {"bucket": "db", "field": "dsn"}
             continue
 
         # 2. peer bucket via STRICT name-prefix match (HOST/PORT/URL-style
@@ -211,12 +224,18 @@ def classify_component_env(
 
         # 4. shared-infra bucket: strict name-prefix match, or value scheme
         # match (e.g. BROKER_URL=redis://... has no "redis" in the key name
-        # at all -- only the value's scheme identifies it).
+        # at all -- only the value's scheme identifies it). `as` mirrors the
+        # peer bucket's tag (host/port/url) so env-create resolves the same
+        # way; a scheme-only match (no suffix hint) defaults to "url" since
+        # that's what a scheme implies (a whole connection URL).
         matched_dep = None
-        for suffixes in (_HOST_SUFFIXES, _PORT_SUFFIXES, _URL_SUFFIXES):
+        dep_as = "url"
+        for suffixes, kind_label in ((_HOST_SUFFIXES, "host"),
+                                      (_PORT_SUFFIXES, "port"),
+                                      (_URL_SUFFIXES, "url")):
             prefix = _strip_suffix(upper, suffixes)
             if prefix and prefix in norm_deps:
-                matched_dep = norm_deps[prefix][0]
+                matched_dep, dep_as = norm_deps[prefix][0], kind_label
                 break
         if not matched_dep:
             scheme = _url_scheme(value)
@@ -224,7 +243,7 @@ def classify_component_env(
                 matched_dep = next((name for name, kind in dependency_names.items()
                                      if kind.lower() == scheme), None)
         if matched_dep:
-            plan[key] = {"bucket": "shared_infra", "target": matched_dep}
+            plan[key] = {"bucket": "shared_infra", "target": matched_dep, "as": dep_as}
             continue
 
         # 5. own-port: informational only, not wired -- confirms the port table.

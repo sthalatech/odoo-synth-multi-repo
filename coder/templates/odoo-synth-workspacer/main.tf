@@ -210,6 +210,22 @@ data "coder_parameter" "agent_system_prompt_b64" {
   order        = 17
 }
 
+# Multi-repo: base64 JSON {"components": [...], "dependencies": [...]} for
+# every component OTHER than odoo (already booted above via odoo_image/
+# dump_s3_uri/repo_url). Each component carries its own resolved env-file URL
+# (lib/backend/component_env.py already resolved DB/peer/shared-infra wiring
+# on the panel side -- the workspace just downloads, sources, and runs).
+# {"components": [], "dependencies": []} (base64) for a legacy single-repo
+# profile -- the loop below then does nothing and only the single Odoo
+# container this template has always booted comes up.
+data "coder_parameter" "components_json" {
+  name         = "components_json"
+  display_name = "Base64 JSON: non-odoo components + shared-infra dependencies"
+  type         = "string"
+  default      = ""
+  order        = 18
+}
+
 # --- Template presets --------------------------------------------------------
 # Presets are auto-generated from the profile store by deploy/_gen_presets.py
 # into presets.tf (one preset per profile that has a built image + a successful
@@ -286,6 +302,7 @@ resource "coder_agent" "main" {
     ODOO_CONF_EXTRA_B64="${data.coder_parameter.odoo_conf_extra_b64.value}"
     AGENT_NAME="${data.coder_parameter.agent_name.value}"
     AGENT_SYSTEM_PROMPT_B64="${data.coder_parameter.agent_system_prompt_b64.value}"
+    COMPONENTS_JSON="${data.coder_parameter.components_json.value}"
     ADMIN_PASS="${local.admin_password}"
     WORKSPACE="/home/dev/workspace"
     REPO_DIR="$WORKSPACE/repo"
@@ -489,6 +506,138 @@ PY
             >/dev/null 2>&1 || true
         fi
       fi
+    fi
+
+    # --- 5b. multi-repo: boot every other component + shared-infra deps -----
+    # {"components": [], "dependencies": []} (base64) for a legacy single-repo
+    # profile -- the python3 step below then writes zero manifest lines and
+    # this whole block is a no-op, same as before multi-repo support existed.
+    # All components here run --network host (like every other odoo-synth
+    # Coder template) so they reach env-db (published at 127.0.0.1:5432) and
+    # each other via plain localhost:<port> -- lib/backend/component_env.py
+    # already resolved every wired env var to that same convention.
+    COMPDIR="/tmp/components"; mkdir -p "$COMPDIR"
+    echo "$COMPONENTS_JSON" | base64 -d > "$COMPDIR/components.json" 2>/dev/null || true
+    python3 - "$COMPDIR" <<'PYEOF' || echo "[env] WARN: components_json processing failed; no extra components will start"
+import json, shlex, sys
+
+compdir = sys.argv[1]
+try:
+    doc = json.load(open(f"{compdir}/components.json"))
+except Exception:
+    doc = {}  # empty/invalid (e.g. a legacy profile's unset default) -> no-op
+
+def sh(v) -> str:
+    """shlex.quote, not repr() -- these lines are SOURCED BY BASH, and
+    Python's string-repr quoting is a different grammar than POSIX shell
+    quoting (mismatched escaping of embedded quotes/backslashes/$ would be a
+    real shell-injection risk for arbitrary values like install/start
+    commands)."""
+    return shlex.quote(str(v) if v is not None else "")
+
+names = []
+for c in doc.get("components") or []:
+    name = c["name"]
+    names.append(name)
+    proc = c.get("process") or {}
+    stat = c.get("static") or {}
+    with open(f"{compdir}/{name}.env", "w") as f:
+        f.write(f'NAME={sh(name)}\n')
+        f.write(f'KIND={sh(c.get("kind"))}\n')
+        f.write(f'PORT={sh(c.get("port"))}\n')
+        f.write(f'IMAGE_URI={sh(c.get("image_uri"))}\n')
+        f.write(f'RESOLVED_REF={sh(c.get("resolved_ref"))}\n')
+        f.write(f'REPO_URL={sh(c.get("repo_url"))}\n')
+        f.write(f'REPO_REF={sh(c.get("repo_ref"))}\n')
+        f.write(f'ENV_GET_URL={sh(c.get("env_get_url"))}\n')
+        f.write(f'INSTALL_CMD={sh(proc.get("install_cmd") or stat.get("install_cmd"))}\n')
+        f.write(f'BUILD_CMD={sh(proc.get("build_cmd") or stat.get("build_cmd"))}\n')
+        f.write(f'START_CMD={sh(proc.get("start_cmd"))}\n')
+        f.write(f'PUBLISH_DIR={sh(stat.get("publish_dir") or "dist")}\n')
+with open(f"{compdir}/manifest.txt", "w") as f:
+    f.write("\n".join(names))
+with open(f"{compdir}/dependencies.txt", "w") as f:
+    for d in (doc.get("dependencies") or []):
+        f.write(f'{shlex.quote(d["name"])} {shlex.quote(d.get("kind", d["name"]))}\n')
+PYEOF
+
+    # --- boot declared shared-infra dependencies first (components may need
+    # them ready before their own start_cmd/entrypoint runs) -----------------
+    if [ -s "$COMPDIR/dependencies.txt" ]; then
+      while read -r DEP_NAME DEP_KIND; do
+        [ -z "$DEP_NAME" ] && continue
+        echo "[env] starting shared dependency $DEP_NAME (kind=$DEP_KIND) ..."
+        case "$DEP_KIND" in
+          redis)
+            docker rm -f "dep-$DEP_NAME" >/dev/null 2>&1 || true
+            docker run -d --name "dep-$DEP_NAME" --network host redis:7-alpine \
+              >/dev/null 2>&1 || echo "[env] WARN: failed to start dependency $DEP_NAME"
+            ;;
+          *)
+            echo "[env] WARN: no default image for dependency kind '$DEP_KIND' ($DEP_NAME) -- skipped, wire it manually"
+            ;;
+        esac
+      done < "$COMPDIR/dependencies.txt"
+    fi
+
+    # --- boot each component per its kind ------------------------------------
+    if [ -s "$COMPDIR/manifest.txt" ]; then
+      while read -r CNAME; do
+        [ -z "$CNAME" ] && continue
+        # shellcheck disable=SC1090
+        . "$COMPDIR/$CNAME.env"
+        echo "[env] starting component $NAME (kind=$KIND) ..."
+        CENV_ARGS=(); CENV_KEYS=""
+        if [ -n "$ENV_GET_URL" ]; then
+          if curl -fsSL "$ENV_GET_URL" -o "$COMPDIR/$NAME.envsh" 2>/dev/null; then
+            . "$COMPDIR/$NAME.envsh"
+            CENV_KEYS="$(grep -oE '^export [A-Za-z_][A-Za-z0-9_]*' "$COMPDIR/$NAME.envsh" | awk '{print $2}')"
+          else
+            echo "[env] WARN: could not download env for $NAME; it will start with no resolved env vars"
+          fi
+          for _k in $CENV_KEYS; do CENV_ARGS+=("-e" "$_k"); done
+        fi
+        case "$KIND" in
+          docker)
+            [ -z "$IMAGE_URI" ] && { echo "[env] WARN: component $NAME has no built image; skipped"; continue; }
+            aws ecr get-login-password --region "$REGION" 2>/dev/null \
+              | docker login --username AWS --password-stdin "$(echo "$IMAGE_URI" | cut -d/ -f1)" >/dev/null 2>&1 || true
+            docker pull "$IMAGE_URI" >/dev/null 2>&1 || { echo "[env] WARN: docker pull failed for $NAME"; continue; }
+            docker rm -f "$NAME" >/dev/null 2>&1 || true
+            docker run -d --name "$NAME" --network host "$${CENV_ARGS[@]}" "$IMAGE_URI" \
+              >/dev/null 2>&1 || echo "[env] WARN: failed to start component $NAME"
+            ;;
+          static)
+            CDIR="$WORKSPACE/components/$NAME"; mkdir -p "$CDIR"
+            git clone --quiet "$REPO_URL" "$CDIR" >/dev/null 2>&1 || echo "[env] WARN: clone failed for $NAME"
+            [ -n "$RESOLVED_REF" ] && { git -C "$CDIR" checkout --quiet "$RESOLVED_REF" 2>/dev/null || echo "[env] WARN: checkout $RESOLVED_REF failed for $NAME"; }
+            (
+              cd "$CDIR"
+              [ -f "$COMPDIR/$NAME.envsh" ] && . "$COMPDIR/$NAME.envsh"
+              [ -n "$INSTALL_CMD" ] && eval "$INSTALL_CMD"
+              [ -n "$BUILD_CMD" ] && eval "$BUILD_CMD"
+            ) >"$COMPDIR/$NAME.buildlog" 2>&1 || echo "[env] WARN: build failed for $NAME (see $COMPDIR/$NAME.buildlog)"
+            SPORT="$${PORT:-8080}"
+            ( cd "$CDIR/$PUBLISH_DIR" 2>/dev/null && nohup python3 -m http.server "$SPORT" --bind 127.0.0.1 \
+              >"$COMPDIR/$NAME.serve.log" 2>&1 & )
+            ;;
+          process)
+            CDIR="$WORKSPACE/components/$NAME"; mkdir -p "$CDIR"
+            git clone --quiet "$REPO_URL" "$CDIR" >/dev/null 2>&1 || echo "[env] WARN: clone failed for $NAME"
+            [ -n "$RESOLVED_REF" ] && { git -C "$CDIR" checkout --quiet "$RESOLVED_REF" 2>/dev/null || echo "[env] WARN: checkout $RESOLVED_REF failed for $NAME"; }
+            (
+              cd "$CDIR"
+              [ -f "$COMPDIR/$NAME.envsh" ] && . "$COMPDIR/$NAME.envsh"
+              [ -n "$INSTALL_CMD" ] && eval "$INSTALL_CMD"
+              [ -n "$BUILD_CMD" ] && eval "$BUILD_CMD"
+              [ -n "$START_CMD" ] && nohup bash -c "$START_CMD" >"$COMPDIR/$NAME.run.log" 2>&1 &
+            ) >"$COMPDIR/$NAME.buildlog" 2>&1 || echo "[env] WARN: setup failed for $NAME (see $COMPDIR/$NAME.buildlog)"
+            ;;
+          *)
+            echo "[env] WARN: unknown component kind '$KIND' for $NAME -- skipped"
+            ;;
+        esac
+      done < "$COMPDIR/manifest.txt"
     fi
 
     # --- 6. in-env info page (Env Guide app) ---------------------------------
