@@ -53,7 +53,11 @@ doc = {
                 "ecr:BatchCheckLayerAvailability", "ecr:InitiateLayerUpload",
                 "ecr:UploadLayerPart", "ecr:CompleteLayerUpload",
                 "ecr:PutImage"],
-     "Resource": [f"arn:aws:ecr:{region}:{acct}:repository/{project}/odoo"]},
+     # Wildcarded to the whole project prefix, not just "<project>/odoo" --
+     # multi-repo builds push to per-component repos created on the fly
+     # (<project>/<component-name>, see build.py's _ensure_ecr_repo), so a
+     # single fixed repo ARN here 403s on every one of those.
+     "Resource": [f"arn:aws:ecr:{region}:{acct}:repository/{project}/*"]},
     {"Sid": "SelfTerminate", "Effect": "Allow",
      "Action": ["ec2:TerminateInstances"], "Resource": "*",
      "Condition": {"StringEquals": {"aws:ResourceTag/odoo-synth:managed": "true"}}},
