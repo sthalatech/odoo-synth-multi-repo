@@ -431,7 +431,8 @@ ${BOLD}2. Set DB/Odoo passwords${OFF} before your first mask/env run. Create
     ODOO_ADMIN_PASSWORD=...        # admin login on the masked DB
     ODOO_MASTER_PASSWORD=...       # Odoo DB manager pw in dev envs
     TARGET_DB_PASSWORD=...         # the ephemeral masked (target) DB
-    SOURCE_DB_MASTER_PASSWORD=... # only if the source DSN omits it
+   (the source DB's password is supplied via --source-dsn on `profile
+   create`/`update`, not a secrets.env var)
 
 ${BOLD}3. Mask${OFF} the source DB -> masked pg_dump in S3:
     odoo-synth profile mask <id> ...
