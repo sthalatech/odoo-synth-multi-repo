@@ -70,6 +70,10 @@ def _url_scheme(value: str) -> str:
         return ""
 
 
+_COMPOSE_FILENAMES = ("docker-compose.yml", "docker-compose.yaml",
+                      "compose.yml", "compose.yaml")
+
+
 def read_env_sample(repo_dir: Path, from_repo: Optional[str]) -> dict[str, str]:
     """Parse a checked-in env file (KEY=value per line) into a dict. Tries
     `from_repo` first if given, else common conventional names -- preferring
@@ -77,9 +81,14 @@ def read_env_sample(repo_dir: Path, from_repo: Optional[str]) -> dict[str, str]:
     falling back to an actually-tracked .env/.env.local/.env.development/
     .env.test, since in practice not every repo follows the sample-file
     convention (some check the real thing into git directly, values and
-    all). Either way this only ever reads whatever is CHECKED INTO the repo
-    at `repo_ref` -- never a developer's untracked local copy, which this
-    process has no access to and never sees. Returns {} if none exist."""
+    all -- discovery still only persists variable NAMES downstream, never
+    these values, so reading the real file is safe). If no env file of any
+    kind exists, falls back to any `environment:` blocks in a checked-in
+    docker-compose file (e.g. a worker service that declares its env inline
+    in compose rather than a .env file). Either way this only ever reads
+    whatever is CHECKED INTO the repo at `repo_ref` -- never a developer's
+    untracked local copy, which this process has no access to and never
+    sees. Returns {} if none exist."""
     candidates = [from_repo] if from_repo else []
     candidates += [".env.sample", ".env.example", ".env.template", "env.sample",
                    ".env", ".env.local", ".env.development", ".env.test"]
@@ -89,6 +98,12 @@ def read_env_sample(repo_dir: Path, from_repo: Optional[str]) -> dict[str, str]:
         p = repo_dir / name
         if p.exists():
             return _parse_env_lines(p.read_text(encoding="utf-8", errors="ignore"))
+    for name in _COMPOSE_FILENAMES:
+        p = repo_dir / name
+        if p.exists():
+            env = _parse_compose_environment(p.read_text(encoding="utf-8", errors="ignore"))
+            if env:
+                return env
     return {}
 
 
@@ -103,6 +118,56 @@ def _parse_env_lines(text: str) -> dict[str, str]:
         val = val.strip().strip('"').strip("'")
         if key:
             out[key] = val
+    return out
+
+
+def _parse_compose_environment(text: str) -> dict[str, str]:
+    """Best-effort extraction of every `environment:` block across all
+    services in a docker-compose file -- covers both compose shapes (list
+    `- KEY=value` and mapping `KEY: value`), merged across services since
+    this is a same-repo fallback signal, not authoritative wiring. Not a
+    full YAML parser (this image is deliberately stdlib-only); an
+    indentation-scoped line scan is enough for the shapes compose actually
+    uses in practice."""
+    out: dict[str, str] = {}
+    lines = text.splitlines()
+    i = 0
+    while i < len(lines):
+        m = re.match(r"^(\s*)environment:\s*(\{.*\})?\s*(#.*)?$", lines[i])
+        if not m:
+            i += 1
+            continue
+        base_indent = len(m.group(1))
+        inline = m.group(2)
+        if inline:
+            for part in inline.strip("{}").split(","):
+                if ":" in part:
+                    k, _, v = part.partition(":")
+                    k = k.strip().strip('"\'')
+                    if k:
+                        out[k] = v.strip().strip('"\'')
+            i += 1
+            continue
+        i += 1
+        while i < len(lines):
+            line = lines[i]
+            if not line.strip():
+                i += 1
+                continue
+            indent = len(line) - len(line.lstrip())
+            if indent <= base_indent:
+                break
+            item = line.strip()
+            if item.startswith("- "):
+                item = item[2:].strip().strip('"\'')
+                key, sep, val = item.partition("=")
+                out[key.strip()] = val.strip() if sep else ""
+            elif ":" in item:
+                key, _, val = item.partition(":")
+                key = key.strip().strip('"\'')
+                if key:
+                    out[key] = val.strip().strip('"\'')
+            i += 1
     return out
 
 
