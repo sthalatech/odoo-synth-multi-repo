@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""GitHub webhook listener -> odoo-synth env + opencode agent launcher.
+"""GitHub webhook listener -> odoo-synth workspace + opencode agent launcher.
 
 Runs ON THE CODER SERVER (the always-on control plane at CODER_SERVER_IP), NOT
 on a dev VM. GitHub POSTs `issues` events from the *profile's addons repo*

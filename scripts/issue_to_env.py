@@ -313,7 +313,7 @@ def main() -> int:
     run_id = latest_successful_mask_run(pid)
     if not run_id:
         _log(f"ERROR: profile {pid} has no succeeded mask run with a dump; "
-             "run `odoo-synth run mask --profile <id>` first")
+             "run `odoo-synth profile mask <id>` first")
         return 1
     _log(f"using masked dump from mask run {run_id}")
 

@@ -386,7 +386,7 @@ else
         warn "CODER_SESSION_TOKEN is not set -- coder login did not persist a token."
         warn "The workspacer/builder/discoverer/masker templates will NOT be"
         warn "published, so 'odoo-synth profile discover/build/mask' and"
-        warn "'odoo-synth env create' will fail with 'template not found' until"
+        warn "'odoo-synth workspace create' will fail with 'template not found' until"
         warn "you publish them. To fix:"
         warn "    coder login $CODER_URL   ${DIM}# or set CODER_SESSION_TOKEN in deploy/state.env${OFF}"
         warn "    bash deploy/12_publish_template.sh"
@@ -434,10 +434,10 @@ ${BOLD}2. Set DB/Odoo passwords${OFF} before your first mask/env run. Create
     SOURCE_DB_MASTER_PASSWORD=... # only if the source DSN omits it
 
 ${BOLD}3. Mask${OFF} the source DB -> masked pg_dump in S3:
-    odoo-synth run mask --profile <id> ...
+    odoo-synth profile mask <id> ...
 
-${BOLD}4. Launch a dev environment${OFF} (one Coder workspace per GitHub issue):
-    odoo-synth env create --profile <id> --issue <num> --repo-url <url>
+${BOLD}4. Launch a dev workspace${OFF} (one Coder workspace per GitHub issue):
+    odoo-synth workspace create --profile-id <id> --issue <num> --repo-url <url>
 
 Re-run ${BOLD}bash deploy/00_setup.sh${OFF} anytime to reconfigure or re-provision.
 NEXT

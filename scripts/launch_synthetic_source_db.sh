@@ -28,8 +28,14 @@ if [[ "${1:-}" == "--teardown" ]]; then
         --filters "Name=tag:Name,Values=$NAME" "Name=instance-state-name,Values=running" \
         --query "Reservations[].Instances[].InstanceId" --output text 2>/dev/null || true)
   if [[ -z "$IID" || "$IID" == "None" ]]; then echo "no running $NAME instance"; exit 0; fi
-  echo "terminating $IID ..."
-  aws ec2 terminate-instances --region "$REGION" --instance-ids "$IID" --query "TerminatingInstances[].InstanceId" --output table
+  # --query ... --output text tab-separates MULTIPLE matches on one line --
+  # passing that as a single quoted --instance-ids value is malformed (AWS
+  # CLI wants each id as its own argument). Word-split into an array instead
+  # (tabs/newlines/spaces are all IFS whitespace), so a teardown after
+  # several launches terminates every one of them, not just fail outright.
+  read -ra IID_ARR <<< "$IID"
+  echo "terminating ${IID_ARR[*]} ..."
+  aws ec2 terminate-instances --region "$REGION" --instance-ids "${IID_ARR[@]}" --query "TerminatingInstances[].InstanceId" --output table
   # SG
   SG_ID=$(aws ec2 describe-security-groups --region "$REGION" --group-names "${NAME}-sg" \
           --query "SecurityGroups[0].GroupId" --output text 2>/dev/null || true)

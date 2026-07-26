@@ -139,7 +139,7 @@ put_state ENV_INSTANCE_PROFILE "$ENV_PROFILE"
 log "env instance profile: $ENV_PROFILE (role $ENV_ROLE)"
 
 # The env workspace's addons repo URL/branch are NOT set here -- they are
-# per-PROFILE / per-workspace concerns, supplied at `odoo-synth env create`
+# per-PROFILE / per-workspace concerns, supplied at `odoo-synth workspace create`
 # time (the env template's repo_url/repo_branch Coder parameters have no
 # default; a profile/preset pre-fills them). Nothing in config.yaml drives
 # this anymore. (The private-repo clone token is a Coder user secret, not an

@@ -1,4 +1,4 @@
-# odoo-synth env
+# odoo-synth-workspacer
 
 A developer environment running Odoo against a masked copy of a production
 database, with an addons repo live-mounted for development.

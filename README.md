@@ -141,7 +141,7 @@ Requires `coder login` once (interactive) before the publish step.
 ./cli/odoo-synth --help
 ./cli/odoo-synth profile --help        # source-binding profiles
 ./cli/odoo-synth run --help            # mask + build runs
-./cli/odoo-synth env --help            # Coder workspaces
+./cli/odoo-synth workspace --help      # Coder workspaces
 ./cli/odoo-synth config                # resolved infra summary
 ```
 

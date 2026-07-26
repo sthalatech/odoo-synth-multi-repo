@@ -1,7 +1,7 @@
 # scripts/ — issue -> env + agent
 
 Two pieces that turn a GitHub issue (opened in a **profile's addons repo**)
-into a running odoo-synth env with an AI agent working on it:
+into a running odoo-synth workspace with an AI agent working on it:
 
 1. `webhook_listener.py` — a Flask app that **runs on the Coder server**
    (the always-on control plane), receives GitHub `issues` webhooks, verifies
@@ -133,10 +133,10 @@ ISSUE_NUMBER=492 ISSUE_REPO_URL=https://github.com/your-org/your-addons-repo \
 # tells the agent to `gh pr create --base <pr_base>` against it
 odoo-synth profile update <profile_id> --pr-base uat
 
-odoo-synth env create --profile-id <id> --source-run-id <run> \
+odoo-synth workspace create --profile-id <id> --source-run-id <run> \
   --issue "#42" --name iss-42-fix-login --upgrade-modules "module_a,module_b"
-odoo-synth env wait <env_id> --timeout 1200
-odoo-synth env agent <env_id> "Resolve #42: fix the login 500" --agent opencode --issue "#42"
+odoo-synth workspace wait <workspace_id> --timeout 1200
+odoo-synth workspace agent <workspace_id> "Resolve #42: fix the login 500" --agent opencode --issue "#42"
 ```
 
 `scripts/issue_to_env.py` is also runnable standalone with env vars

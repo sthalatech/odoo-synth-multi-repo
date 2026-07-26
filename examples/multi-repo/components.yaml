@@ -1,0 +1,63 @@
+# Input for:
+#   odoo-synth profile create --components-file examples/multi-repo/components.yaml \
+#                              --dependencies-file examples/multi-repo/dependencies.yaml ...
+#   odoo-synth profile update  <id> --components-file examples/multi-repo/components.yaml
+#
+# Real 5-repo setup validated during multi-repo design (odoo + 4 services).
+# `port` is the platform's own assignment (used for peer wiring + the
+# workspace's --network host binding) -- discovery only *proposes* one from a
+# Dockerfile EXPOSE/--port as a hint, it never invents one for you.
+#
+# `env.from_repo` is left unset on every non-odoo component: discovery falls
+# back to trying the common conventional names itself (.env.sample,
+# .env.example, .env.template, env.sample, .env, .env.local, .env.development,
+# .env.test) against each repo at its pinned ref. Set `env.from_repo`
+# explicitly only if a repo's real file doesn't match any of those.
+
+- name: odoo
+  kind: odoo
+  repo_url: https://github.com/IshaFoundationIT/prs-backend
+  repo_ref: uat
+  port: null
+  odoo:
+    odoo_series: "17.0"
+    odoo_git_url: https://github.com/odoo/odoo
+    odoo_git_ref: "17.0"
+    needs_enterprise: true
+    enterprise_source: https://github.com/odoo/enterprise.git
+
+- name: facade
+  kind: docker
+  repo_url: https://github.com/IshaFoundationIT/prs-facade
+  repo_ref: uat
+  port: 8000
+  docker:
+    dockerfile: Dockerfile
+
+- name: worker
+  kind: docker
+  repo_url: https://github.com/IshaFoundationIT/prs-worker
+  repo_ref: main
+  port: null
+  docker:
+    dockerfile: Dockerfile
+
+- name: frontend
+  kind: static
+  repo_url: https://github.com/IshaFoundationIT/prs-frontend
+  repo_ref: dev
+  port: 3000
+  static:
+    install_cmd: npm ci
+    build_cmd: npm run build
+    publish_dir: dist
+
+- name: admin-frontend
+  kind: process
+  repo_url: https://github.com/IshaFoundationIT/irs-admin-frontend
+  repo_ref: dev
+  port: 9000
+  process:
+    install_cmd: npm ci
+    build_cmd: npm run build
+    start_cmd: npm run start

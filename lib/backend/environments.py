@@ -79,7 +79,7 @@ def _put_password_secret(env_id: str, password: str) -> str:
     name = f"{_env_secret_prefix()}/{env_id}/password"
     try:
         resp = sm.create_secret(Name=name, SecretString=password,
-                                Description="odoo-synth env Odoo admin password")
+                                Description="odoo-synth workspace Odoo admin password")
         return resp["ARN"]
     except sm.exceptions.ResourceExistsException:
         sm.put_secret_value(SecretId=name, SecretString=password)

@@ -1,0 +1,11 @@
+# Input for: odoo-synth profile create --dependencies-file examples/multi-repo/dependencies.yaml ...
+#            odoo-synth profile update  <id> --dependencies-file examples/multi-repo/dependencies.yaml
+#
+# Shared infra declared by name + kind (never auto-provisioned, never
+# assumed) -- the workspace boots these before any component that wires to
+# them. `kind` doubles as the URL scheme discovery matches against a
+# component's env values (e.g. BROKER_URL=redis://... -> kind: redis) when no
+# name-prefix hint is present.
+
+- name: redis
+  kind: redis

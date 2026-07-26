@@ -16,7 +16,7 @@ cache that auto-populates from S3 on read.
 >   `coder users create alice@example.com` / `coder users list`.
 > **Workspace creation** is via the Coder dashboard (presets) or
 >   `coder create -t odoo-synth-workspacer ...`. The CLI still launches/tears down
->   developer environments via `odoo-synth env ...` (it calls `coder create`
+>   developer workspaces via `odoo-synth workspace ...` (it calls `coder create`
 >   under the hood).
 
 ## Install
@@ -46,17 +46,17 @@ odoo-synth profile images delete <id> --image <uri>
 odoo-synth profile masking-rules <id> [--json]
 odoo-synth profile masking-rules <id> --set <file|->   # update from YAML (file or stdin)
 odoo-synth profile masking-rules <id> --reset          # reset to discovered plan
-odoo-synth run mask --profile <id>                     # profile path (produces a dump)
+odoo-synth profile mask <id>                           # profile path (produces a dump)
 odoo-synth run mask --source-dsn <dsn> [--mask-profile …] [--produce-dump] [--ssh-* …]  # legacy inline
 odoo-synth run list [--json]
 odoo-synth run show <id>
 odoo-synth run logs <id> [--follow]                    # print stored logs; --follow polls
-odoo-synth env list [--json]
-odoo-synth env create --profile-id <id> | --source-run-id <id> | --dump-s3-uri s3://…
-odoo-synth env show <id>
-odoo-synth env password <id>
-odoo-synth env delete <id>
-odoo-synth env config
+odoo-synth workspace list [--json]
+odoo-synth workspace create --profile-id <id> | --source-run-id <id> | --dump-s3-uri s3://…
+odoo-synth workspace show <workspace_id>
+odoo-synth workspace password <workspace_id>
+odoo-synth workspace delete <workspace_id>
+odoo-synth workspace config
 odoo-synth config                            # non-secret infra summary
 ```
 
