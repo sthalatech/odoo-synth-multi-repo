@@ -86,13 +86,16 @@
     # package.json/lockfile before wiring install/build commands.
     install_cmd: yarn install --immutable
     build_cmd: yarn build
-    # `process` kind, not `static`: the repo's own package.json already
-    # defines "preview": "vite preview --port 3003" -- Vite's preview
-    # server correctly serves the production build (SPA-fallback, etc.),
-    # which a generic static-file server (what `static` kind uses) does
-    # not do on its own. Always prefer a component's own serve mechanism
-    # over approximating one -- $PORT is exported by the boot script
-    # before this runs, overriding the repo's own hardcoded --port.
+    # `process` kind, not `static`: Vite's preview server correctly serves
+    # the production build (SPA-fallback, etc.), which a generic static-file
+    # server (what `static` kind uses) does not do on its own. Always prefer
+    # a component's own serve mechanism over approximating one.
+    #
+    # Calls the `vite` binary directly (via `yarn vite ...`), NOT the repo's
+    # own "preview": "vite preview --port 3003" package.json script -- that
+    # script is never invoked at all, so its hardcoded port is irrelevant.
+    # $PORT (this component's own `port:` above, exported by the boot
+    # script) is the only port ever used here.
     start_cmd: yarn vite preview --port $PORT --host 127.0.0.1 --strictPort
 
 - name: admin-frontend
