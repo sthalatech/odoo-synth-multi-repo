@@ -647,6 +647,16 @@ PYEOF
     if [ -s "$COMPDIR/manifest.txt" ]; then
       while read -r CNAME; do
         [ -z "$CNAME" ] && continue
+        # Every var this iteration sources/sets (NAME, KIND, PORT, REPO_URL,
+        # ...) is confined to this subshell. Without it, `. $CNAME.env`
+        # leaks straight into the top-level script scope (a `while read; do
+        # ...; done < file` loop does NOT fork a subshell in bash) and the
+        # LAST component processed clobbers vars of the same name used
+        # elsewhere -- e.g. the Odoo addons-repo $REPO_URL/$RESOLVED_REF
+        # referenced later in the Env Guide page. `continue` inside a
+        # subshell doesn't reach the outer loop, so each early-exit below
+        # uses `exit 0` instead (which only ends this subshell/iteration).
+        (
         # shellcheck disable=SC1090
         . "$COMPDIR/$CNAME.env"
         echo "[env] starting component $NAME (kind=$KIND) ..."
@@ -662,10 +672,10 @@ PYEOF
         fi
         case "$KIND" in
           docker)
-            [ -z "$IMAGE_URI" ] && { echo "[env] WARN: component $NAME has no built image; skipped"; continue; }
+            [ -z "$IMAGE_URI" ] && { echo "[env] WARN: component $NAME has no built image; skipped"; exit 0; }
             aws ecr get-login-password --region "$REGION" 2>/dev/null \
               | docker login --username AWS --password-stdin "$(echo "$IMAGE_URI" | cut -d/ -f1)" >/dev/null 2>&1 || true
-            docker pull "$IMAGE_URI" >/dev/null 2>&1 || { echo "[env] WARN: docker pull failed for $NAME"; continue; }
+            docker pull "$IMAGE_URI" >/dev/null 2>&1 || { echo "[env] WARN: docker pull failed for $NAME"; exit 0; }
             docker rm -f "$NAME" >/dev/null 2>&1 || true
             docker run -d --name "$NAME" --network host "$${CENV_ARGS[@]}" "$IMAGE_URI" \
               >/dev/null 2>&1 || echo "[env] WARN: failed to start component $NAME"
@@ -713,6 +723,7 @@ PYEOF
             echo "[env] WARN: unknown component kind '$KIND' for $NAME -- skipped"
             ;;
         esac
+        ) || echo "[env] WARN: component $CNAME failed unexpectedly"
       done < "$COMPDIR/manifest.txt"
     fi
 
