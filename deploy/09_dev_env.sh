@@ -114,12 +114,12 @@ doc = {
     {"Sid": "EcrPull", "Effect": "Allow",
      "Action": ["ecr:BatchGetImage", "ecr:GetDownloadUrlForLayer",
                 "ecr:BatchCheckLayerAvailability"],
-     "Resource": [f"arn:aws:ecr:{region}:{acct}:repository/{project}/odoo",
-                  # Option E Phase 3: the runner workspaces (mask + discovery)
-                  # also assume this unprivileged profile and pull the masker /
-                  # discovery images. Pull-only -- no ECR push, no source DB.
-                  f"arn:aws:ecr:{region}:{acct}:repository/{project}/masker",
-                  f"arn:aws:ecr:{region}:{acct}:repository/{project}/discovery"]},
+     # Wildcarded to the whole project prefix: this role is also assumed by
+     # dev workspaces, which pull every multi-repo component's own image
+     # (<project>/<component-name>, created on the fly -- see build.py's
+     # _ensure_ecr_repo) in addition to odoo/masker/discovery, so a fixed
+     # enumeration here 403s on every component repo.
+     "Resource": [f"arn:aws:ecr:{region}:{acct}:repository/{project}/*"]},
   ],
 }
 print(json.dumps(doc))

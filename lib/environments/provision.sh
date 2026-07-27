@@ -43,6 +43,14 @@ if ! command -v aws >/dev/null 2>&1; then
   rm -rf /tmp/awscli.zip /tmp/aws
 fi
 
+# --- Node.js LTS + corepack (for multi-repo `static`/`process` components --
+# each repo pins its own package manager via package.json's "packageManager"
+# field, e.g. yarn@4.5.0 or pnpm@10.30.1; corepack shims whichever one a
+# given repo actually needs rather than assuming npm everywhere).
+curl -fsSL https://deb.nodesource.com/setup_lts.x | bash -
+apt-get install -y --no-install-recommends nodejs
+corepack enable
+
 # --- ttyd (web terminal that serves Claude Code via the Coder app) -------
 apt-get install -y --no-install-recommends ttyd
 

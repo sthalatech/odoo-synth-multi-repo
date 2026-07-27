@@ -555,7 +555,12 @@ for c in doc.get("components") or []:
         f.write(f'START_CMD={sh(proc.get("start_cmd"))}\n')
         f.write(f'PUBLISH_DIR={sh(stat.get("publish_dir") or "dist")}\n')
 with open(f"{compdir}/manifest.txt", "w") as f:
-    f.write("\n".join(names))
+    # Trailing newline matters: `while read -r NAME; do ...; done < manifest.txt`
+    # below silently drops the LAST entry without it (bash's `read` returns
+    # failure on a final line with no newline, which fails the loop condition
+    # before the body runs for it).
+    for n in names:
+        f.write(n + "\n")
 with open(f"{compdir}/dependencies.txt", "w") as f:
     for d in (doc.get("dependencies") or []):
         f.write(f'{shlex.quote(d["name"])} {shlex.quote(d.get("kind", d["name"]))}\n')
@@ -635,6 +640,12 @@ PYEOF
             (
               cd "$CDIR"
               [ -f "$COMPDIR/$NAME.envsh" ] && . "$COMPDIR/$NAME.envsh"
+              # nohup spawns a NEW process, which only inherits exported
+              # (environment) vars, not plain shell vars -- PORT was only a
+              # plain var sourced from $NAME.env until now, so a process kind
+              # component's own server always saw its framework's built-in
+              # default port instead of its actual platform-assigned one.
+              export PORT="$${PORT:-8080}"
               [ -n "$INSTALL_CMD" ] && eval "$INSTALL_CMD"
               [ -n "$BUILD_CMD" ] && eval "$BUILD_CMD"
               [ -n "$START_CMD" ] && nohup bash -c "$START_CMD" >"$COMPDIR/$NAME.run.log" 2>&1 &
