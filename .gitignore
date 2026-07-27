@@ -34,3 +34,11 @@ odoo/enterprise/*
 !odoo/enterprise/README.md
 profiles/
 lib/backend/envs.yaml
+
+# Your real, project-specific profile input (components.yaml/dependencies.yaml)
+# -- always contains real repo URLs and (until ref:-secrets support exists)
+# real secrets in env.overrides. Never committed; examples/multi-repo/ is the
+# git-tracked, secret-free template to copy from instead. Keep folder + README.
+overrides/*
+!overrides/README.md
+!overrides/.gitkeep
