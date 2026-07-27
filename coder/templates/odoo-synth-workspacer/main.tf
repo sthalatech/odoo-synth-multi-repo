@@ -1078,7 +1078,15 @@ resource "coder_app" "component" {
   display_name = each.key
   # expose.path is the app tile's entry point when it isn't "/" (e.g.
   # facade's Swagger UI lives at /docs) -- optional, defaults to root.
-  url       = "http://localhost:${each.value.expose.port}${lookup(each.value.expose, "path", "")}"
+  url = "http://localhost:${each.value.expose.port}${lookup(each.value.expose, "path", "")}"
+  # expose.share (owner/authenticated/public), default "owner": Coder's own
+  # tunnel gate requires a login session for every request by default, which
+  # 303-redirects a CORS preflight (no session cookie on it) -- a fatal
+  # error per spec, since a preflight response can never be a redirect. A
+  # component another exposed component's browser-side JS calls directly
+  # needs "public" so Coder's gate steps aside and the component's own
+  # app-level auth (if any) is what actually protects it.
+  share     = lookup(each.value.expose, "share", "owner")
   subdomain = true
 }
 

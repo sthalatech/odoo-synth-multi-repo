@@ -23,6 +23,16 @@
 # internal-only. Optional `expose.path` sets the tile's entry point when
 # it isn't "/" -- e.g. facade below opens straight to its Swagger UI at
 # /docs rather than its bare API root.
+#
+# `expose.share` (owner/authenticated/public, default owner) controls how
+# much of Coder's OWN tunnel auth gate applies. "owner" (the default) is
+# right for a human opening a UI in their own logged-in browser -- wrong for
+# a component that another exposed component's browser-side JS calls
+# directly (e.g. admin-frontend's fetch() to facade): a CORS preflight never
+# carries the Coder session cookie, so the gate 303-redirects it and the
+# browser rejects a redirected preflight outright. facade below uses
+# "public" so Coder's gate steps aside and facade's own system-token check
+# is what actually protects it.
 
 - name: odoo
   kind: odoo
@@ -44,6 +54,7 @@
   expose:
     port: 8000
     path: /docs
+    share: public
   docker:
     dockerfile: Dockerfile
 

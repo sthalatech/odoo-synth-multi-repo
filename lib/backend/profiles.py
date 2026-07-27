@@ -117,6 +117,20 @@ def _validate_components(components: Any) -> list[dict[str, Any]]:
                 raise ValueError(
                     f"components[{i}] ({name!r}): expose.path must be a string "
                     f"(got {path!r})")
+            # Optional: how much Coder's own tunnel auth gate applies to this
+            # app tile, same three levels coder_app's own "share" takes.
+            # Defaults to "owner" (Coder login required for every request --
+            # fine for a human opening a UI in their own browser, but wrong
+            # for a component another exposed component's browser-side JS
+            # calls directly: a CORS preflight never carries the session
+            # cookie, so Coder's gate 303-redirects it and the browser
+            # rejects the redirected preflight outright. "public" hands auth
+            # entirely to the component's own app-level check instead.)
+            share = expose.get("share", "owner")
+            if share not in ("owner", "authenticated", "public"):
+                raise ValueError(
+                    f"components[{i}] ({name!r}): expose.share must be one of "
+                    f"owner/authenticated/public (got {share!r})")
     return components
 
 
