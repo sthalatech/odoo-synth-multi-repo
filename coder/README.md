@@ -21,7 +21,12 @@ other three are covered inline in `lib/backend/pipeline.py` /
 - **Coder server** — one `t3.small` EC2 instance in your default VPC, running
   `coder server` + its bundled PostgreSQL. Deployed by `deploy/11_coder_server.sh`.
   Workspace agents dial **out** to it on port 8943; developers open the dashboard
-  at `http://<coder-ip>:8943`. It has its own IAM role (`<project>-coder-role`)
+  at `http://<coder-ip>:8943` by default, or `https://coder.<PUBLIC_DOMAIN>`
+  once `deploy/14_caddy_https.sh` has been run (see below) -- PUBLIC_DOMAIN/
+  PUBLIC_SCHEME in `deploy/state.env` are the one place that hostname/scheme
+  live, so switching to a real domain later is just changing those two
+  values and re-running `deploy/11_coder_server.sh` + `deploy/14_caddy_https.sh`.
+  It has its own IAM role (`<project>-coder-role`)
   so its Terraform can launch workspace VMs (ec2 run/stop/start/terminate +
   `iam:PassRole` on the env instance role).
 - **Workspace VMs** — launched by the Coder server from the `odoo-synth-workspacer`
@@ -65,9 +70,11 @@ so the workspace isn't "ready" until Odoo answers HTTP. The agent bootstrap
 (`user_data` on the `aws_instance`) downloads the Coder agent binary and starts
 it with `CODER_AGENT_TOKEN` + `CODER_AGENT_URL`.
 
-`coder_app` resources (`odoo` → `:8069`, `vscode` → `:8443`) make both reachable
-through the Coder tunnel at
-`http://<coder-url>/@<owner>/<workspace>/apps/<slug>/`.
+`coder_app` resources (`odoo` → `:8069`, plus one per exposed component) make
+each reachable through the Coder tunnel on its own subdomain origin
+(`<slug>--<workspace>--<owner>.<PUBLIC_DOMAIN>`, via `CODER_WILDCARD_ACCESS_URL`)
+-- required for Odoo, whose login form/assets use absolute server-root paths
+that would otherwise resolve against the dashboard origin and 404.
 
 ## One-time setup
 
@@ -77,6 +84,7 @@ deploy/11_coder_server.sh     # launches the Coder server (one EC2)
 coder login <CODER_URL>       # create the first admin (interactive, once)
 # paste the token into config.yaml under coder.session_token
 deploy/12_publish_template.sh # publish all four odoo-synth templates to the server
+deploy/14_caddy_https.sh      # optional: real HTTPS for the dashboard + every app tile
 ```
 
 `CODER_URL` + `CODER_SESSION_TOKEN` in `config.yaml` are what the panel's
