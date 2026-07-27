@@ -411,6 +411,27 @@ def coder_url() -> str:
     return s.get("coder_url") or get("CODER_URL", "") or ""
 
 
+def public_domain() -> str:
+    """The base domain browser-facing app/dashboard URLs are built under, e.g.
+    "98.91.135.76.nip.io" today or a real Cloudflare-managed domain later --
+    swapping providers is just changing this one value in deploy/state.env,
+    with no code change. Falls back to "<coder host>.nip.io" (the historical
+    bare-IP-only behavior) if unset, for a deploy that hasn't set it yet."""
+    v = get("PUBLIC_DOMAIN", "")
+    if v:
+        return v
+    from urllib.parse import urlsplit
+    host = urlsplit(coder_url()).hostname or ""
+    return f"{host}.nip.io" if host else ""
+
+
+def public_scheme() -> str:
+    """The scheme browser-facing app/dashboard URLs are built with. Defaults
+    to "https"; set PUBLIC_SCHEME=http in deploy/state.env only for a
+    plain-HTTP deploy (e.g. Caddy/TLS not set up yet)."""
+    return get("PUBLIC_SCHEME", "") or "https"
+
+
 @lru_cache(maxsize=1)
 def _configured_token_valid() -> bool | None:
     """Has the configured CODER_SESSION_TOKEN been verified against CODER_URL?

@@ -107,32 +107,24 @@ def _delete_password_secret(arn: str | None) -> None:
     except Exception:  # noqa: BLE001
         pass
 
-_IPV4_RE = re.compile(r"^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$")
-
-
 def _subdomain_url(subdomain_name: str) -> str:
     """Build the browser-reachable URL for a subdomain-hosted coder_app.
 
-    CODER_URL is the Coder server origin, e.g. http://13.222.25.98:8943, and
-    CODER_WILDCARD_ACCESS_URL on the server is "*.<host>.nip.io:<port>" for a
-    bare-IP CODER_URL (see 11_coder_server.sh) -- nip.io gives wildcard DNS
-    for "*.<ip>.nip.io" with no real domain needed. Coder exposes per-app
-    `subdomain_name` = "<app>--<ws>--<owner>"; the app origin is
-    "<subdomain_name>.<same suffix Coder's own wildcard uses>:<port>".
-    Only append .nip.io for a bare IP host -- a real domain is assumed to
-    already have its own wildcard DNS set up by whoever configured it that
-    way, and appending .nip.io there would be wrong.
+    Built from PUBLIC_DOMAIN/PUBLIC_SCHEME (deploy/state.env), NOT parsed out
+    of CODER_URL -- CODER_URL is the Coder server's own internal origin
+    (always bare-IP http://, unrelated to the public HTTPS hostname Caddy
+    fronts it with), while PUBLIC_DOMAIN is the one place the actual
+    browser-facing domain lives. Coder exposes per-app `subdomain_name` =
+    "<app>--<ws>--<owner>"; the app origin is "<subdomain_name>.<PUBLIC_DOMAIN>"
+    with no port (Caddy terminates 443/80; CODER_WILDCARD_ACCESS_URL on the
+    server matches the same PUBLIC_DOMAIN, see deploy/11_coder_server.sh).
+    Switching to a real Cloudflare-managed domain later is just changing
+    PUBLIC_DOMAIN in deploy/state.env -- no code change.
     """
-    base = config.get("CODER_URL", "").rstrip("/")
-    if not base or not subdomain_name:
+    domain = config.public_domain()
+    if not domain or not subdomain_name:
         return ""
-    from urllib.parse import urlsplit
-    ps = urlsplit(base)
-    host, port = ps.hostname, ps.port
-    if host and _IPV4_RE.match(host):
-        host = f"{host}.nip.io"
-    full_host = f"{subdomain_name}.{host}" + (f":{port}" if port else "")
-    return f"{ps.scheme}://{full_host}"
+    return f"{config.public_scheme()}://{subdomain_name}.{domain}"
 
 
 def _api(path: str) -> dict:
@@ -670,10 +662,8 @@ def reconcile() -> None:
         # (/web/login, /web/session/authenticate, /web/static/...) that resolve
         # against the app's own origin. With the old path proxy
         # (@owner/ws/apps/slug) those hit the Coder dashboard origin and 404.
-        # The API exposes subdomain_name = "<app>--<ws>--<owner>"; the full host
-        # is "<subdomain_name>.<wildcard-base>" where wildcard-base is the
-        # CODER_URL host (the server's wildcard is "*.<that host>", so we
-        # prefix the subdomain name to the same host:port).
+        # The API exposes subdomain_name = "<app>--<ws>--<owner>"; the full
+        # host is "<subdomain_name>.<PUBLIC_DOMAIN>" (see _subdomain_url).
         odoo = None
         wuuid = w.get("id")
         if wuuid:

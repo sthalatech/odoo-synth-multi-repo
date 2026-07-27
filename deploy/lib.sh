@@ -47,6 +47,25 @@ put_state(){ # key value
   export "$1=$2"
 }
 
+# Ephemeral SSH via EC2 Instance Connect -- works even with no persisted
+# keypair on the target instance (the Coder server launches with KeyName
+# unset). Re-pushes the key right before each call since EIC keys are only
+# valid ~60s for the initial handshake; the key itself is reused across calls
+# within one script run. Requires ec2-instance-connect:SendSSHPublicKey.
+EIC_KEY="$HERE/deploy/.eic_key"
+eic_ssh(){ # instance-id az ip -- remote-cmd...
+  local iid="$1" az="$2" ip="$3"; shift 3
+  [ "${1:-}" = "--" ] && shift
+  [ -f "$EIC_KEY" ] || ssh-keygen -t ed25519 -f "$EIC_KEY" -N "" -q -C odoo-synth-eic >&2
+  aws ec2-instance-connect send-ssh-public-key --region "$AWS_REGION" \
+    --instance-id "$iid" --availability-zone "$az" --instance-os-user ubuntu \
+    --ssh-public-key "file://${EIC_KEY}.pub" >/dev/null
+  ssh -i "$EIC_KEY" -o StrictHostKeyChecking=accept-new -o ConnectTimeout=15 \
+    "ubuntu@$ip" "$@"
+}
+instance_az(){ aws ec2 describe-instances --region "$AWS_REGION" --instance-ids "$1" \
+    --query 'Reservations[0].Instances[0].Placement.AvailabilityZone' --output text; }
+
 vpc_id(){ aws ec2 describe-vpcs --filters Name=isDefault,Values=true \
     --query 'Vpcs[0].VpcId' --output text --region "$AWS_REGION"; }
 

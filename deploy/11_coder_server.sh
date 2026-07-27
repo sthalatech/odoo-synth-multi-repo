@@ -32,11 +32,21 @@ CODER_PORT="${CODER_PORT:-8943}"
 CODER_INSTANCE_TYPE="${CODER_INSTANCE_TYPE:-t3.small}"
 CODER_VOLUME_GB="${CODER_VOLUME_GB:-20}"
 CODER_VERSION="${CODER_VERSION:-v2.34.6}"
-REBUILD=0; DO_LOGIN=0
+# Browser-facing domain + scheme for the dashboard + every subdomain app tile
+# (see deploy/14_caddy_https.sh for the reverse proxy that actually terminates
+# TLS). Kept separate from CODER_SERVER_IP/CODER_URL -- which stay the
+# server's own bare-IP-http origin, what Coder is told about itself -- so
+# switching to a real Cloudflare-managed domain later is JUST changing
+# PUBLIC_DOMAIN in deploy/state.env (or re-running this script with it set in
+# the environment), no code change anywhere.
+PUBLIC_DOMAIN="${PUBLIC_DOMAIN:-}"
+PUBLIC_SCHEME="${PUBLIC_SCHEME:-https}"
+REBUILD=0; DO_LOGIN=0; NO_SYNC=0
 for a in "$@"; do
   case "$a" in
-    --rebuild) REBUILD=1 ;;
-    --login)   DO_LOGIN=1 ;;
+    --rebuild)  REBUILD=1 ;;
+    --login)    DO_LOGIN=1 ;;
+    --no-sync)  NO_SYNC=1 ;;  # skip pushing coder.env changes to an existing instance
     *) log "unknown arg: $a"; exit 2 ;;
   esac
 done
@@ -139,6 +149,7 @@ get_coder_instance(){
     --output text 2>/dev/null | head -1
 }
 EXISTING="$(get_coder_instance)"
+WAS_REUSED=0
 if [ -n "$EXISTING" ] && [ "$EXISTING" != "None" ]; then
   I_ID="$(awk '{print $1}' <<<"$EXISTING")"
   if [ "$REBUILD" = 1 ]; then
@@ -146,6 +157,8 @@ if [ -n "$EXISTING" ] && [ "$EXISTING" != "None" ]; then
     aws ec2 terminate-instances --region "$AWS_REGION" --instance-ids "$I_ID" >/dev/null
     aws ec2 wait instance-terminated --region "$AWS_REGION" --instance-ids "$I_ID" 2>/dev/null || true
     EXISTING=""
+  else
+    WAS_REUSED=1
   fi
 fi
 
@@ -180,15 +193,34 @@ install -d -m 700 -o coder -g coder /etc/coder
 # /web/static/...) that would otherwise resolve against the Coder dashboard
 # origin and 404. The Coder flag is --wildcard-access-url /
 # CODER_WILDCARD_ACCESS_URL (NOT CODER_APP_HOSTNAME, which is ignored).
-# nip.io gives wildcard DNS without a real domain: *.A.B.C.D.nip.io -> A.B.C.D.
+#
+# PUBLIC_SCHEME/PUBLIC_DOMAIN_OVERRIDE below are the only two lines this
+# LOCAL script substitutes into an otherwise fully self-contained remote
+# script (see the sed call right after this heredoc is written) -- everything
+# else here runs purely with values this remote instance resolves itself.
+# https: PUBLIC_DOMAIN_OVERRIDE must already be known (a real domain decided
+# ahead of time; a bare-IP nip.io domain can't be known before this instance
+# has an IP). http (no Caddy yet): falls back to the historical bare-IP
+# origin, nip.io wildcard DNS with no real domain needed.
+PUBLIC_SCHEME="__PUBLIC_SCHEME__"
+PUBLIC_DOMAIN_OVERRIDE="__PUBLIC_DOMAIN_OR_EMPTY__"
+if [ "$PUBLIC_SCHEME" = "https" ] && [ -n "$PUBLIC_DOMAIN_OVERRIDE" ]; then
+  ACCESS_URL="https://coder.${PUBLIC_DOMAIN_OVERRIDE}"
+  WILDCARD_URL="https://*.${PUBLIC_DOMAIN_OVERRIDE}"
+else
+  ACCESS_URL="http://${MYIP}:8943"
+  WILDCARD_URL="*.${MYIP}.nip.io:8943"
+fi
 cat > /etc/coder/coder.env <<EENV
-CODER_ACCESS_URL=http://${MYIP}:8943
+CODER_ACCESS_URL=${ACCESS_URL}
 CODER_HTTP_ADDRESS=0.0.0.0:8943
-# NOTE: the wildcard host MUST include the port (:8943); without it, Coder
-# builds app subdomain URLs on the default port 80, which the SG blocks
-# (only 8943 + 22 are open). The auth-redirect Location header then sends
-# browsers to port 80 -> connection timeout.
-CODER_WILDCARD_ACCESS_URL=*.${MYIP}.nip.io:${CODER_PORT}
+# NOTE: for the plain-http fallback (no PUBLIC_SCHEME=https / no Caddy yet),
+# the wildcard host MUST include the port (:8943); without it, Coder builds
+# app subdomain URLs on the default port 80, which the SG blocks (only
+# 8943 + 22 are open) -> the auth-redirect Location header sends browsers to
+# port 80 and they time out. Once Caddy fronts 443/80 (PUBLIC_SCHEME=https),
+# no port is needed -- see deploy/14_caddy_https.sh.
+CODER_WILDCARD_ACCESS_URL=${WILDCARD_URL}
 CODER_LOG_FILTER=debug
 EENV
 cat > /etc/systemd/system/coder-server.service <<'UNIT'
@@ -212,6 +244,9 @@ systemctl daemon-reload
 systemctl enable --now coder-server
 echo "coder-server started; access_url=${MYIP}:8943"
 UD_EOF
+  # Inject the two LOCAL-known values the remote script above needs (its own
+  # heredoc stayed single-quoted, so nothing else leaked in by accident).
+  sed -i "s/__PUBLIC_SCHEME__/${PUBLIC_SCHEME}/; s/__PUBLIC_DOMAIN_OR_EMPTY__/${PUBLIC_DOMAIN}/" "$UD"
   # AMI id (Ubuntu 24.04 LTS via SSM public parameter).
   CODER_AMI="$(aws ssm get-parameters --region "$AWS_REGION" \
     --names /aws/service/canonical/ubuntu/server/24.04/stable/current/amd64/hvm/ebs-gp3/ami-id \
@@ -262,6 +297,50 @@ put_state CODER_SERVER_IP "$CODER_IP"
 put_state CODER_INSTANCE_ID "$I_ID"
 put_state CODER_URL "$CODER_URL"
 log "Coder server: id=$I_ID  url=$CODER_URL"
+
+# PUBLIC_DOMAIN default: bare-IP nip.io, same convention the fresh-launch
+# path falls back to. An operator who later points this at a real
+# Cloudflare-managed domain sets PUBLIC_DOMAIN in deploy/state.env once, and
+# every subsequent run (this script + 14_caddy_https.sh) just picks it up.
+[ -n "$PUBLIC_DOMAIN" ] || PUBLIC_DOMAIN="${CODER_IP}.nip.io"
+put_state PUBLIC_DOMAIN "$PUBLIC_DOMAIN"
+put_state PUBLIC_SCHEME "$PUBLIC_SCHEME"
+
+# Sync coder.env on an EXISTING instance: cloud-init/user-data only ever runs
+# once, at first boot, so a config change here (PUBLIC_DOMAIN/PUBLIC_SCHEME,
+# or picking up drift like an EIP swap) needs to be pushed by hand to a
+# server that already exists. Skipped for a instance just freshly launched
+# above (its user-data already wrote the right file) and for --no-sync.
+if [ "$WAS_REUSED" = 1 ] && [ "$NO_SYNC" != 1 ]; then
+  log "syncing coder.env on existing instance $I_ID ($CODER_IP) ..."
+  AZ="$(instance_az "$I_ID")"
+  if [ "$PUBLIC_SCHEME" = "https" ]; then
+    WANT_ACCESS_URL="https://coder.${PUBLIC_DOMAIN}"
+    WANT_WILDCARD_URL="https://*.${PUBLIC_DOMAIN}"
+  else
+    WANT_ACCESS_URL="http://${CODER_IP}:${CODER_PORT}"
+    WANT_WILDCARD_URL="*.${PUBLIC_DOMAIN}:${CODER_PORT}"
+  fi
+  CUR="$(eic_ssh "$I_ID" "$AZ" "$CODER_IP" -- "sudo cat /etc/coder/coder.env 2>/dev/null" || true)"
+  if grep -qF "CODER_ACCESS_URL=$WANT_ACCESS_URL" <<<"$CUR" \
+     && grep -qF "CODER_WILDCARD_ACCESS_URL=$WANT_WILDCARD_URL" <<<"$CUR"; then
+    log "coder.env already up to date, no restart needed"
+  else
+    log "coder.env changed (access_url=$WANT_ACCESS_URL wildcard=$WANT_WILDCARD_URL) -- pushing + restarting coder-server"
+    eic_ssh "$I_ID" "$AZ" "$CODER_IP" -- "bash -s" -- "$WANT_ACCESS_URL" "$WANT_WILDCARD_URL" <<'REMOTE'
+set -euo pipefail
+ACCESS_URL="$1"; WILDCARD_URL="$2"
+sudo tee /etc/coder/coder.env >/dev/null <<EENV
+CODER_ACCESS_URL=${ACCESS_URL}
+CODER_HTTP_ADDRESS=0.0.0.0:8943
+CODER_WILDCARD_ACCESS_URL=${WILDCARD_URL}
+CODER_LOG_FILTER=debug
+EENV
+sudo systemctl restart coder-server
+echo "coder-server restarted with access_url=${ACCESS_URL}"
+REMOTE
+  fi
+fi
 
 # wait for the HTTP endpoint to answer (user-data + service start ~1-2 min)
 log "waiting for Coder dashboard at $CODER_URL ..."

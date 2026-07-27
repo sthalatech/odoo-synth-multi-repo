@@ -1,5 +1,7 @@
 state.env
 config.env
+deploy/.eic_key
+deploy/.eic_key.pub
 config.yaml
 deploy/secrets.env
 # auto-generated Coder presets
