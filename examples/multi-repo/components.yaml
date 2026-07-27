@@ -85,7 +85,19 @@
     # right yarn version. Do not assume npm: check each repo's actual
     # package.json/lockfile before wiring install/build commands.
     install_cmd: yarn install --immutable
-    build_cmd: yarn build
+    # Vite's preview server refuses any request whose Host header isn't
+    # localhost/what it was told to bind to -- a DNS-rebinding protection
+    # that has nothing to do with app logic, but blocks every request
+    # through Coder's tunnel (a different hostname per workspace) unless
+    # explicitly allowed. No CLI flag or env var for this exists (checked
+    # `vite preview --help` and vite's own source directly) -- only
+    # vite.config.ts's preview.allowedHosts, which this repo's committed
+    # config doesn't set at all. Patched into the freshly-cloned copy at
+    # build time (never the actual GitHub repo) via the existing, fully
+    # operator-controlled build_cmd -- not a new mechanism, since this is a
+    # one-off gap specific to this repo's config, not a generic problem
+    # worth a dedicated schema field for.
+    build_cmd: sed -i "s/server: {/preview: { allowedHosts: true }, server: {/" vite.config.ts && yarn build
     # `process` kind, not `static`: Vite's preview server correctly serves
     # the production build (SPA-fallback, etc.), which a generic static-file
     # server (what `static` kind uses) does not do on its own. Always prefer
