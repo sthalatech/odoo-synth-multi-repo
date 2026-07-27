@@ -62,7 +62,13 @@
   kind: docker
   repo_url: https://github.com/IshaFoundationIT/prs-worker
   repo_ref: main
-  port: null
+  # Not a pure background worker: its own start.sh runs celery worker + celery
+  # beat + celery flower (--port=5555, --basic_auth) all in one container --
+  # 5555 is its actual (and only) HTTP surface, so it's exposed here rather
+  # than as a standalone dependency.
+  port: 5555
+  expose:
+    port: 5555
   docker:
     dockerfile: Dockerfile
 

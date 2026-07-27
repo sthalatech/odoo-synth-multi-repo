@@ -8,15 +8,11 @@
 # name-prefix hint is present.
 #
 # A dependency can also opt into a Coder-dashboard app tile via `expose`,
-# same shape/rules as a component's (see components.yaml) -- e.g. flower
-# below is a monitoring dashboard for the "redis" dependency's broker
-# (used by worker's Celery), not a broker itself, so it's worth a tile even
-# though it isn't a "component".
+# same shape/rules as a component's (see components.yaml) -- useful for a
+# monitoring sidecar that genuinely runs as its own standalone container
+# (nothing here needs that in this profile: prs-worker's own image already
+# bundles Celery Flower internally, so it's exposed as part of the worker
+# component instead -- see components.yaml).
 
 - name: redis
   kind: redis
-
-- name: flower
-  kind: flower
-  expose:
-    port: 5555

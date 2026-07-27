@@ -657,17 +657,6 @@ PYEOF
             docker run -d --name "dep-$DEP_NAME" --network host redis:7-alpine \
               >/dev/null 2>&1 || echo "[env] WARN: failed to start dependency $DEP_NAME"
             ;;
-          flower)
-            # Celery Flower: a monitoring dashboard, not a broker itself --
-            # points at the SAME redis dependency every celery-kind component
-            # already uses (127.0.0.1:6379, this template's fixed convention
-            # for the "redis" dependency kind, see DEFAULT_DEPENDENCY_PORTS).
-            docker rm -f "dep-$DEP_NAME" >/dev/null 2>&1 || true
-            docker run -d --name "dep-$DEP_NAME" --network host \
-              -e CELERY_BROKER_URL=redis://localhost:6379/0 \
-              mher/flower:2.0 --port=5555 \
-              >/dev/null 2>&1 || echo "[env] WARN: failed to start dependency $DEP_NAME"
-            ;;
           *)
             echo "[env] WARN: no default image for dependency kind '$DEP_KIND' ($DEP_NAME) -- skipped, wire it manually"
             ;;
