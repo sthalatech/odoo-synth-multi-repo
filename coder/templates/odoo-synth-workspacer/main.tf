@@ -59,7 +59,7 @@ data "coder_parameter" "ami_id" {
 # and regions without hardcoding account-specific AMI IDs.
 data "aws_ami" "ubuntu_2204" {
   most_recent = true
-  owners      = ["099720109477"]  # Canonical
+  owners      = ["099720109477"] # Canonical
 
   filter {
     name   = "name"
@@ -137,8 +137,8 @@ data "coder_parameter" "repo_branch" {
   display_name = "Branch/tag/commit of the addons repo."
   type         = "string"
   # No default: the user must supply their own branch/commit (or use a preset).
-  default      = ""
-  order        = 9
+  default = ""
+  order   = 9
 }
 
 data "coder_parameter" "git_token_env" {
@@ -983,15 +983,15 @@ OCSVC
     # --- 8. port-forwards Coder opens so the dev reaches odoo ---
     # `coder_port` resources below tell Coder to proxy these through the tunnel.
 
-    # --- 9. readiness: block startup until Odoo answers HTTP ---
-    if [ -n "$ODOO_IMAGE" ]; then
-      for _ in $(seq 1 72); do
-        code="$(curl -s -o /dev/null -w '%%{http_code}' --max-time 5 http://127.0.0.1:18069/web/login 2>/dev/null || echo 000)"
-        case "$code" in 200|301|302|303) echo "[env] odoo ready (http $code)"; exit 0 ;; esac
-        sleep 10
-      done
-      echo "[env] WARN: odoo did not answer within 12m; marking ready anyway"
-    fi
+    # Odoo readiness is its own coder_script (see resource "coder_script"
+    # "odoo_readiness" below), not the tail of this one -- a long poll loop
+    # ending in `exit 0` as literally the last thing a startup_script does
+    # was intermittently triggering Coder's "output pipes were not closed
+    # after 10s" warning (confirmed via the agent log: exit_code=255, i.e.
+    # Coder force-killed the process group after the pipe-close timeout).
+    # Splitting it into its own coder_script gives it its own timeout and
+    # its own pipe tracking, decoupled from everything else this script
+    # does above.
   EOT
   env = {
     # expose the per-workspace passwords to the agent so the startup_script
@@ -1003,6 +1003,34 @@ OCSVC
     CODER_ENV_ADMIN_PASSWORD = local.admin_password
     ODOO_MASTER_PASSWORD     = data.coder_parameter.odoo_master_password.value
   }
+}
+
+# Odoo readiness, split out of coder_agent.main's startup_script (see the
+# comment left in its place above) -- its own timeout and pipe tracking,
+# so a long poll loop ending in `exit 0` can't trip the "output pipes were
+# not closed" warning on the OTHER script that does everything else.
+# start_blocks_login = true keeps the same user-visible behavior as before:
+# the workspace shows "starting" on the dashboard until Odoo actually
+# answers, not just until docker pull/component boot finishes.
+resource "coder_script" "odoo_readiness" {
+  agent_id           = coder_agent.main.id
+  display_name       = "Odoo readiness"
+  run_on_start       = true
+  start_blocks_login = true
+  timeout            = 900
+  script             = <<-EOT
+    #!/usr/bin/env bash
+    set -euo pipefail
+    ODOO_IMAGE="${data.coder_parameter.odoo_image.value}"
+    if [ -n "$ODOO_IMAGE" ]; then
+      for _ in $(seq 1 72); do
+        code="$(curl -s -o /dev/null -w '%%{http_code}' --max-time 5 http://127.0.0.1:18069/web/login 2>/dev/null || echo 000)"
+        case "$code" in 200|301|302|303) echo "[env] odoo ready (http $code)"; exit 0 ;; esac
+        sleep 10
+      done
+      echo "[env] WARN: odoo did not answer within 12m; marking ready anyway"
+    fi
+  EOT
 }
 
 
@@ -1036,10 +1064,10 @@ resource "aws_instance" "workspace" {
   EOT
   user_data_replace_on_change = true
   tags = {
-    Name                 = "odoo-synth-workspacer-${data.coder_workspace.me.name}"
+    Name                    = "odoo-synth-workspacer-${data.coder_workspace.me.name}"
     "odoo-synth:workspacer" = data.coder_workspace.me.id
-    "odoo-synth:managed" = "true"
-    "odoo-synth:issue"   = data.coder_parameter.issue.value
+    "odoo-synth:managed"    = "true"
+    "odoo-synth:issue"      = data.coder_parameter.issue.value
   }
 }
 
