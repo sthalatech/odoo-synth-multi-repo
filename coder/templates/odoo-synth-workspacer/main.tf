@@ -564,6 +564,64 @@ with open(f"{compdir}/manifest.txt", "w") as f:
 with open(f"{compdir}/dependencies.txt", "w") as f:
     for d in (doc.get("dependencies") or []):
         f.write(f'{shlex.quote(d["name"])} {shlex.quote(d.get("kind", d["name"]))}\n')
+
+# Env Guide fragment: entirely generated from this profile's actual
+# components/dependencies (whatever they are) -- never a fixed list of
+# names, so it reflects any profile from a legacy odoo-only one up to
+# however many repos/services a given operator wired in.
+import html as _html
+
+DEFAULT_DEP_PORTS = {"redis": 6379}  # kept in sync with component_env.py's
+CONTROL_HINTS = {
+    "docker": "docker start|stop|restart {name}",
+    "static": "served by a background python http.server; re-open this workspace's startup log or restart the workspace to rebuild/reserve it",
+    "process": "background process (no systemd unit); find it with pgrep -fa '{name}' or inspect /tmp/components/{name}.run.log",
+}
+LOG_HINTS = {
+    "docker": "docker logs -f {name}",
+    "static": "/tmp/components/{name}.buildlog (build), /tmp/components/{name}.serve.log (serve)",
+    "process": "/tmp/components/{name}.buildlog (build), /tmp/components/{name}.run.log (run)",
+}
+
+rows = []
+for c in (doc.get("components") or []):
+    name = c["name"]
+    kind = c.get("kind") or "?"
+    port = c.get("port")
+    port_cell = f"127.0.0.1:{port}" if port else "&mdash;"
+    repo_cell = (f'{_html.escape(str(c.get("repo_url") or ""))}<br><code>{_html.escape(str(c.get("resolved_ref") or c.get("repo_ref") or ""))}</code>'
+                 if c.get("repo_url") else "&mdash;")
+    control = CONTROL_HINTS.get(kind, "no default control hint for kind '{kind}'").format(name=name, kind=kind)
+    logs = LOG_HINTS.get(kind, "&mdash;").format(name=name)
+    rows.append(
+        f"<tr><td><code>{_html.escape(name)}</code></td><td>{_html.escape(kind)}</td>"
+        f"<td>{port_cell}</td><td>{repo_cell}</td>"
+        f"<td><code>{_html.escape(control)}</code></td><td><code>{_html.escape(logs)}</code></td></tr>"
+    )
+components_table = (
+    "<table><tr><th>name</th><th>kind</th><th>host port</th><th>repo @ ref</th>"
+    "<th>control</th><th>logs</th></tr>" + "".join(rows) + "</table>"
+    if rows else "<p>No additional components on this profile -- single-repo (Odoo-only).</p>"
+)
+
+dep_rows = []
+for d in (doc.get("dependencies") or []):
+    name = d["name"]
+    kind = (d.get("kind") or name).lower()
+    port = DEFAULT_DEP_PORTS.get(kind)
+    conn = f"127.0.0.1:{port}" if port else "no default port for kind '{}' -- wire it manually".format(kind)
+    dep_rows.append(
+        f"<tr><td><code>{_html.escape(name)}</code></td><td>{_html.escape(kind)}</td>"
+        f"<td><code>dep-{_html.escape(name)}</code></td><td><code>{_html.escape(conn)}</code></td></tr>"
+    )
+dependencies_table = (
+    "<table><tr><th>name</th><th>kind</th><th>container</th><th>connect</th></tr>" + "".join(dep_rows) + "</table>"
+    if dep_rows else "<p>No shared-infra dependencies on this profile.</p>"
+)
+
+with open(f"{compdir}/components_guide.html", "w") as f:
+    f.write("<h2>Multi-repo components</h2>\n" + components_table + "\n")
+    f.write("<h2>Shared dependencies</h2>\n" + dependencies_table + "\n")
 PYEOF
 
     # --- boot declared shared-infra dependencies first (components may need
@@ -689,6 +747,8 @@ PYEOF
 <tr><td><code>env-odoo</code></td><td>Odoo server (image-baked addons)</td><td>127.0.0.1:18069 &rarr; 8069</td></tr>
 <tr><td><code>env-db</code></td><td>local Postgres 16 (hydrated from masked dump)</td><td>127.0.0.1:5432</td></tr>
 </table>
+
+$(cat "$COMPDIR/components_guide.html" 2>/dev/null)
 
 <h2>Addons repo (live-mounted)</h2>
 <p>
