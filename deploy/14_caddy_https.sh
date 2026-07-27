@@ -171,21 +171,25 @@ RestartSec=5
 WantedBy=multi-user.target
 UNIT
 sudo systemctl daemon-reload
-sudo systemctl enable --now odoo-synth-tls-ask
-sudo systemctl restart odoo-synth-tls-ask
+# NOT enable --now here -- tls_ask.py itself isn't on disk yet (shipped by a
+# separate scp right after this heredoc, since it needs a local file, not
+# heredoc content); starting now would crash-loop on a missing file. `enable`
+# only (boot persistence); the scp step below does the first actual start.
+sudo systemctl enable odoo-synth-tls-ask >/dev/null 2>&1
 
 sudo systemctl enable --now caddy >/dev/null 2>&1
 sudo systemctl reload caddy 2>/dev/null || sudo systemctl restart caddy
 echo "caddy active: $(sudo systemctl is-active caddy)"
-echo "tls-ask active: $(sudo systemctl is-active odoo-synth-tls-ask)"
 REMOTE
 
 # ship tls_ask.py itself (kept as a real file on disk here, not baked into
 # the heredoc above, so it's one `scp` away from being edited/redeployed).
+# This is also the first actual start of the service (see the `enable` note
+# above -- restart starts it fine even if it was never running).
 scp -i "$EIC_KEY" -o StrictHostKeyChecking=accept-new \
   "$HERE/deploy/refresh/tls_ask.py" "ubuntu@$CODER_SERVER_IP:/tmp/tls_ask.py"
 eic_ssh "$CODER_INSTANCE_ID" "$AZ" "$CODER_SERVER_IP" -- \
-  "sudo install -m 0755 /tmp/tls_ask.py /opt/odoo-synth-tls-ask/tls_ask.py && sudo systemctl restart odoo-synth-tls-ask"
+  "sudo install -m 0755 /tmp/tls_ask.py /opt/odoo-synth-tls-ask/tls_ask.py && sudo systemctl restart odoo-synth-tls-ask && echo tls-ask active: \$(systemctl is-active odoo-synth-tls-ask)"
 
 log "HTTPS is live at https://$HOSTNAME/ (dashboard) and https://<slug>--<ws>--<owner>.$PUBLIC_DOMAIN/ (app tiles)."
 log "Point config.yaml / webhooks at: https://$HOSTNAME"
@@ -201,19 +205,22 @@ log "serve https:// for them."
 #    a fetch failure it keeps the existing allowlist (fail-closed/stale > broken).
 #    The renderer becomes the source of truth for the Caddyfile, so the inline
 #    one above is just the bootstrap. NOTE: today's renderer only re-renders
-#    the dashboard block's allowlist; the wildcard block above is untouched by
-#    it either way.
+#    the renderer's own Caddyfile template mirrors the bootstrap one above
+#    (both blocks, on_demand_tls + ask) -- keep them in sync if either changes.
 # ---------------------------------------------------------------------------
 log "installing GitHub-IP auto-refresh (refresh-github-ips.timer, every 6h) ..."
 scp -i "$EIC_KEY" -o StrictHostKeyChecking=accept-new \
   "$HERE/deploy/refresh/refresh_github_ips.py" "ubuntu@$CODER_SERVER_IP:/tmp/refresh_github_ips.py"
-eic_ssh "$CODER_INSTANCE_ID" "$AZ" "$CODER_SERVER_IP" -- "bash -s" -- "$HOSTNAME" "$PORT" <<'REMOTE'
+eic_ssh "$CODER_INSTANCE_ID" "$AZ" "$CODER_SERVER_IP" -- "bash -s" -- \
+  "$HOSTNAME" "$PUBLIC_DOMAIN" "$PORT" "$ASK_PORT" <<'REMOTE'
 set -euo pipefail
-HOSTNAME="$1"; PORT="$2"
+HOSTNAME="$1"; PUBLIC_DOMAIN="$2"; PORT="$3"; ASK_PORT="$4"
 sudo install -m 0755 /tmp/refresh_github_ips.py /usr/local/sbin/refresh_github_ips.py
 sudo tee /etc/caddy/refresh.env >/dev/null <<EOF
 CADDY_HOSTNAME=$HOSTNAME
+PUBLIC_DOMAIN=$PUBLIC_DOMAIN
 WEBHOOK_PORT=$PORT
+ASK_PORT=$ASK_PORT
 EOF
 sudo tee /etc/systemd/system/refresh-github-ips.service >/dev/null <<UNIT
 [Unit]

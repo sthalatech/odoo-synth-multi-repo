@@ -8,7 +8,10 @@ zero needless Caddy restarts). Fails closed: on a fetch/parse error it leaves th
 existing Caddyfile untouched (GitHub's ranges change rarely; a stale allowlist is
 better than a broken one).
 
-Runs from a systemd timer (refresh-github-ips.timer) on the Coder server.
+Runs from a systemd timer (refresh-github-ips.timer) on the Coder server. This is
+the ongoing source of truth for the Caddyfile -- the one deploy/14_caddy_https.sh
+writes at install time is just the bootstrap; keep this template in sync with that
+script's whenever either changes.
 
 Writes /etc/caddy/.github_hook_ips for inspection + a stamp file with the last
 successful refresh timestamp.
@@ -28,9 +31,10 @@ IPS_CACHE = Path("/etc/caddy/.github_hook_ips")
 STAMP = Path("/etc/caddy/.github_hook_ips.refreshed")
 FALLBACK = "192.30.252.0/22 185.199.108.0/22 140.82.112.0/20 143.55.64.0/20"
 
-CODER_SERVER_IP = os.environ.get("CODER_SERVER_IP", "")
-HOSTNAME = os.environ.get("CADDY_HOSTNAME", f"coder.{CODER_SERVER_IP}.nip.io")
+PUBLIC_DOMAIN = os.environ.get("PUBLIC_DOMAIN", "")
+HOSTNAME = os.environ.get("CADDY_HOSTNAME", f"coder.{PUBLIC_DOMAIN}")
 LISTENER_PORT = os.environ.get("WEBHOOK_PORT", "8080")
+ASK_PORT = os.environ.get("ASK_PORT", "8081")
 
 
 def fetch_hook_ips() -> str:
@@ -52,13 +56,19 @@ def fetch_hook_ips() -> str:
 
 
 def render_caddyfile(hook_ips: str) -> str:
-    return f"""{HOSTNAME} {{
+    return f"""{{
+	on_demand_tls {{
+		ask http://127.0.0.1:{ASK_PORT}
+	}}
+}}
+
+{HOSTNAME} {{
 	encode zstd gzip
 
-	# GitHub webhook -> odoo-synth listener (localhost only). Restricted to
-	# GitHub's hook IP ranges (auto-refreshed by refresh_github_ips.py); everyone
-	# else gets 403. The listener additionally verifies the HMAC signature +
-	# dedupes by X-GitHub-Delivery.
+	# GitHub webhook -> odoo-synth listener (localhost only, if/when deployed).
+	# Restricted to GitHub's hook IP ranges (auto-refreshed by this script);
+	# everyone else gets 403. The listener additionally verifies the HMAC
+	# signature + dedupes by X-GitHub-Delivery.
 	@github_webhook {{
 		path /webhook
 		remote_ip {hook_ips}
@@ -67,7 +77,6 @@ def render_caddyfile(hook_ips: str) -> str:
 		reverse_proxy 127.0.0.1:{LISTENER_PORT} {{
 			flush_interval -1
 			header_up X-Forwarded-Proto https
-			header_up X-Forwarded-Host {HOSTNAME}
 		}}
 	}}
 	# /webhook from a non-GitHub IP -> 403 (must come before the catch-all)
@@ -75,22 +84,37 @@ def render_caddyfile(hook_ips: str) -> str:
 	handle @webhook_path {{
 		respond 403
 	}}
-	# everything else -> the Coder HTTP server (dashboard + API)
+	# everything else -> the Coder HTTP server (dashboard + API). Host is
+	# passed through unchanged -- it already equals {HOSTNAME}, which is
+	# exactly what Coder's own CODER_ACCESS_URL is configured as.
 	handle {{
 		reverse_proxy 127.0.0.1:8943 {{
 			flush_interval -1
-			header_up Host {CODER_SERVER_IP}:8943
 			header_up X-Forwarded-Proto https
-			header_up X-Forwarded-Host {HOSTNAME}
 		}}
+	}}
+}}
+
+# Every subdomain app tile (frontend/facade/admin-frontend/worker/odoo, ...).
+# Hostnames are dynamic so a static cert can't cover them -- on-demand TLS
+# issues one per exact hostname on first request, gated by the ask endpoint
+# above.
+*.{PUBLIC_DOMAIN} {{
+	encode zstd gzip
+	tls {{
+		on_demand
+	}}
+	reverse_proxy 127.0.0.1:8943 {{
+		flush_interval -1
+		header_up X-Forwarded-Proto https
 	}}
 }}
 """
 
 
 def main() -> int:
-    if not CODER_SERVER_IP:
-        sys.stderr.write("ERROR: CODER_SERVER_IP not set\n")
+    if not PUBLIC_DOMAIN:
+        sys.stderr.write("ERROR: PUBLIC_DOMAIN not set\n")
         return 1
     hook_ips = fetch_hook_ips()
     new_text = render_caddyfile(hook_ips)
