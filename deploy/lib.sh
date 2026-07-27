@@ -66,6 +66,41 @@ eic_ssh(){ # instance-id az ip -- remote-cmd...
 instance_az(){ aws ec2 describe-instances --region "$AWS_REGION" --instance-ids "$1" \
     --query 'Reservations[0].Instances[0].Placement.AvailabilityZone' --output text; }
 
+# Ensures instance $1 has an Elastic IP associated -- a plain
+# --associate-public-ip-address instance gets a DYNAMIC public IP that
+# changes on stop/start (this exact drift broke the HTTPS/nip.io setup once
+# already: an unpinned IP invalidates every cert + bookmarked URL tied to it).
+# Reuses a previously-allocated-but-now-unassociated EIP tagged $2 first
+# (e.g. left over from a --rebuild, so the address -- and every cert/DNS
+# record pinned to it -- survives instance replacement too), before
+# allocating a brand new one. Echoes the resulting public IP on stdout.
+ensure_eip(){ # instance-id  name-tag
+  local iid="$1" name="$2" ip alloc
+  ip="$(aws ec2 describe-addresses --region "$AWS_REGION" \
+    --filters "Name=instance-id,Values=$iid" \
+    --query 'Addresses[0].PublicIp' --output text 2>/dev/null)"
+  if [ -n "$ip" ] && [ "$ip" != "None" ]; then
+    echo "$ip"
+    return
+  fi
+  alloc="$(aws ec2 describe-addresses --region "$AWS_REGION" \
+    --filters "Name=tag:Name,Values=$name" \
+    --query 'Addresses[].[AllocationId,AssociationId]' --output text 2>/dev/null \
+    | awk '$2=="None" || $2=="" {print $1; exit}')"
+  if [ -z "$alloc" ]; then
+    log "allocating a new Elastic IP ($name) ..."
+    alloc="$(aws ec2 allocate-address --region "$AWS_REGION" --domain vpc \
+      --tag-specifications "ResourceType=elastic-ip,Tags=[{Key=Name,Value=$name},{Key=odoo-synth:managed,Value=true}]" \
+      --query AllocationId --output text)"
+  else
+    log "reusing previously-allocated Elastic IP ($name, $alloc) ..."
+  fi
+  aws ec2 associate-address --region "$AWS_REGION" \
+    --instance-id "$iid" --allocation-id "$alloc" >/dev/null
+  aws ec2 describe-addresses --region "$AWS_REGION" --allocation-ids "$alloc" \
+    --query 'Addresses[0].PublicIp' --output text
+}
+
 vpc_id(){ aws ec2 describe-vpcs --filters Name=isDefault,Values=true \
     --query 'Vpcs[0].VpcId' --output text --region "$AWS_REGION"; }
 

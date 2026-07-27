@@ -13,13 +13,24 @@
 # adds zero managed services. Workspace agents reach it over the public internet
 # on one port (8943); developers reach the dashboard at http://<ip>:8943.
 #
-# Writes CODER_URL / CODER_SERVER_IP / CODER_INSTANCE_ID / CODER_SG_ID to
-# deploy/state.env. The control panel reads CODER_URL + a CODER_SESSION_TOKEN
-# (set by `coder login` once, stored in config.yaml) to drive `coder create`/
-# `coder delete`/the API.
+# Writes CODER_URL / CODER_SERVER_IP / CODER_INSTANCE_ID / CODER_SG_ID /
+# PUBLIC_DOMAIN / PUBLIC_SCHEME to deploy/state.env. The control panel reads
+# CODER_URL + a CODER_SESSION_TOKEN (set by `coder login` once, stored in
+# config.yaml) to drive `coder create`/`coder delete`/the API.
 #
-# Idempotent: re-running reuses the instance + SG. Pass --rebuild to terminate
-# and recreate (loses the server's DB). Pass --login to print the login URL.
+# Also allocates + associates an Elastic IP (deploy/lib.sh's ensure_eip) so
+# the instance's public IP survives a stop/start -- a plain dynamic IP
+# doesn't, which silently invalidated every HTTPS cert/URL pinned to it once
+# already. A --rebuild reuses the same previously-allocated EIP rather than
+# getting a new address each time.
+#
+# Idempotent: re-running reuses the instance + SG + EIP, and re-syncs
+# coder.env (PUBLIC_DOMAIN/PUBLIC_SCHEME, or picking up IP drift) even if
+# nothing else changed -- cheap no-op when it's already correct. Pass
+# --rebuild to terminate and recreate the instance (loses the server's DB).
+# Pass --login to print the login URL. Pass --no-sync to skip the coder.env
+# sync/restart (e.g. scripting many small state.env tweaks before the final
+# apply).
 #
 # Usage:
 #   deploy/11_coder_server.sh                # create if missing, else no-op
@@ -298,6 +309,31 @@ put_state CODER_INSTANCE_ID "$I_ID"
 put_state CODER_URL "$CODER_URL"
 log "Coder server: id=$I_ID  url=$CODER_URL"
 
+# wait for the HTTP endpoint to answer (user-data + service start ~1-2 min).
+# Done BEFORE the Elastic IP step below so a fresh launch's dashboard-up
+# check exercises the instance directly, and -- just as importantly -- so
+# sshd (up long before cloud-init/user-data finishes) is certainly ready by
+# the time ensure_eip's sync step below needs to SSH in.
+log "waiting for Coder dashboard at $CODER_URL ..."
+for i in $(seq 1 60); do
+  code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 "$CODER_URL" 2>/dev/null || echo 000)"
+  case "$code" in 200|301|302|303) log "Coder is up (http $code)"; break ;; esac
+  sleep 5
+done
+
+# Elastic IP: a plain --associate-public-ip-address instance (what the
+# fresh-launch path above uses) gets a DYNAMIC IP -- this pins it, so it
+# survives a stop/start instead of invalidating every cert/URL tied to it
+# (see ensure_eip in deploy/lib.sh). No-ops if already associated.
+EIP_IP="$(ensure_eip "$I_ID" "$CODER_NAME-eip")"
+if [ "$EIP_IP" != "$CODER_IP" ]; then
+  log "Elastic IP associated: $EIP_IP (was $CODER_IP)"
+  CODER_IP="$EIP_IP"
+  CODER_URL="http://$CODER_IP:$CODER_PORT"
+  put_state CODER_SERVER_IP "$CODER_IP"
+  put_state CODER_URL "$CODER_URL"
+fi
+
 # PUBLIC_DOMAIN default: bare-IP nip.io, same convention the fresh-launch
 # path falls back to. An operator who later points this at a real
 # Cloudflare-managed domain sets PUBLIC_DOMAIN in deploy/state.env once, and
@@ -306,13 +342,14 @@ log "Coder server: id=$I_ID  url=$CODER_URL"
 put_state PUBLIC_DOMAIN "$PUBLIC_DOMAIN"
 put_state PUBLIC_SCHEME "$PUBLIC_SCHEME"
 
-# Sync coder.env on an EXISTING instance: cloud-init/user-data only ever runs
-# once, at first boot, so a config change here (PUBLIC_DOMAIN/PUBLIC_SCHEME,
-# or picking up drift like an EIP swap) needs to be pushed by hand to a
-# server that already exists. Skipped for a instance just freshly launched
-# above (its user-data already wrote the right file) and for --no-sync.
-if [ "$WAS_REUSED" = 1 ] && [ "$NO_SYNC" != 1 ]; then
-  log "syncing coder.env on existing instance $I_ID ($CODER_IP) ..."
+# Sync coder.env: cloud-init/user-data only ever runs once, at first boot,
+# using whatever IP the instance had BEFORE the Elastic IP step just above --
+# so even a fresh launch needs this (not just a reused instance: WAS_REUSED
+# alone used to gate this, which missed exactly that fresh-launch case).
+# Also covers picking up any other PUBLIC_DOMAIN/PUBLIC_SCHEME drift.
+# --no-sync skips it.
+if [ "$NO_SYNC" != 1 ]; then
+  log "syncing coder.env on $I_ID ($CODER_IP) ..."
   AZ="$(instance_az "$I_ID")"
   if [ "$PUBLIC_SCHEME" = "https" ]; then
     WANT_ACCESS_URL="https://coder.${PUBLIC_DOMAIN}"
@@ -345,7 +382,9 @@ REMOTE
   fi
 fi
 
-# wait for the HTTP endpoint to answer (user-data + service start ~1-2 min)
+# confirm the dashboard is (still/again) up -- the sync step above may have
+# just restarted coder-server, and CODER_URL may now point at a different IP
+# than the first wait loop checked (if ensure_eip just swapped it).
 log "waiting for Coder dashboard at $CODER_URL ..."
 for i in $(seq 1 60); do
   code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 "$CODER_URL" 2>/dev/null || echo 000)"
