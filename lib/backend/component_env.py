@@ -14,7 +14,18 @@ peer is a docker container or a native process/static server.
 """
 from __future__ import annotations
 
+import re
 from typing import Any
+
+# An override value of exactly this shape ("$EXTERNAL_URL(facade)") is
+# resolved to that peer's actual browser-reachable subdomain URL, not a
+# literal string. Distinct from the "peer" wiring bucket (component.
+# discovered.wiring_plan), which always resolves to an internal
+# localhost:<port> -- server-side wiring is workspace-invariant, but a
+# browser-facing var (NEXT_PUBLIC_*, VITE_*, ...) needs a URL that's only
+# known once a specific workspace exists (its subdomain encodes the
+# workspace name), so it can't be a fixed literal in components.yaml.
+_EXTERNAL_URL_RE = re.compile(r"^\$EXTERNAL_URL\(([a-z0-9-]+)\)$")
 
 # dependency kind -> the port it's booted on when the workspace provisions it
 # itself (see environments.py's dependency-boot step). Only kinds with a
@@ -94,7 +105,8 @@ def _resolve_url_shaped(as_kind: str, host: str, port, scheme: str = "http") -> 
 def resolve_component_env(component: dict[str, Any], dest_conn: dict,
                           port_table: dict[str, int],
                           dependency_conn: dict[str, dict],
-                          odoo_conn: dict | None = None) -> dict[str, str]:
+                          odoo_conn: dict | None = None,
+                          external_url_table: dict[str, str] | None = None) -> dict[str, str]:
     """A component's fully-resolved env vars: db-bucket vars point at the
     shared local DB, odoo-bucket vars point at this workspace's own local
     Odoo (a fixed target, like the db bucket -- not discovered per-profile),
@@ -103,10 +115,18 @@ def resolve_component_env(component: dict[str, Any], dest_conn: dict,
     confirms the component's own port. "external" vars are never auto-filled
     -- only present if the operator supplied env.overrides for them.
     overrides always win, for every bucket (an operator can force any value,
-    including one auto-wiring would have produced differently)."""
+    including one auto-wiring would have produced differently).
+
+    An override value of "$EXTERNAL_URL(<name>)" is a third case, resolved
+    against external_url_table (built by environments.create(), which knows
+    this workspace's own name) -- for browser-facing vars like Next.js's
+    NEXT_PUBLIC_* or Vite's VITE_* that need a peer's actual subdomain URL,
+    not its internal localhost:<port> (the browser runs on the developer's
+    own machine, not inside the workspace's network namespace)."""
     wiring_plan = ((component.get("discovered") or {}).get("wiring_plan")) or {}
     overrides = ((component.get("env") or {}).get("overrides")) or {}
     odoo_conn = odoo_conn or {}
+    external_url_table = external_url_table or {}
 
     resolved: dict[str, str] = {}
     for key, info in wiring_plan.items():
@@ -135,7 +155,11 @@ def resolve_component_env(component: dict[str, Any], dest_conn: dict,
         # "external": never auto-filled -- only env.overrides (applied below)
         # or nothing at all, same as required_config_keys/odoo_conf_extra.
 
-    resolved.update({k: str(v) for k, v in overrides.items()})
+    for k, v in overrides.items():
+        m = _EXTERNAL_URL_RE.match(str(v))
+        resolved[k] = external_url_table.get(m.group(1), "") if m else str(v)
+
     # drop keys that resolved to "" (unresolvable -- e.g. peer/dependency with
-    # no port) so the workspace doesn't export an empty, misleading value.
+    # no port, or $EXTERNAL_URL(x) where x has no expose.port set) so the
+    # workspace doesn't export an empty, misleading value.
     return {k: v for k, v in resolved.items() if v != ""}

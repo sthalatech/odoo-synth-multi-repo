@@ -138,6 +138,15 @@ def _api(path: str) -> dict:
         return {}
 
 
+def _current_coder_owner() -> str:
+    """The Coder username every `coder create` in this pipeline runs as
+    (whoever CODER_SESSION_TOKEN belongs to) -- needed to pre-build a
+    workspace's own subdomain app URLs (see external_url_table in create()
+    below) before the workspace exists. Never hardcoded: this control plane
+    is meant to work for any operator's own Coder user, not just "admin"."""
+    return _api("users/me").get("username") or "admin"
+
+
 def _api_send(path: str, method: str = "POST", body: dict | None = None) -> dict:
     """Call the Coder HTTP API with a request body (POST/PUT/DELETE). Raises
     RuntimeError with the server's message on a non-2xx so the panel surfaces
@@ -277,6 +286,14 @@ def create(source_run_id: Optional[str], issue: Optional[str],
     agent_system_prompt_b64 = base64.b64encode(
         (agent_system_prompt or "").encode()).decode()
 
+    # Workspace identity, computed up front (not just before store.create_
+    # environment below) because component env resolution needs it: an
+    # NEXT_PUBLIC_*/VITE_*-style browser-facing var pointing at a peer
+    # component needs that peer's actual subdomain URL, which is keyed on
+    # this workspace's own name (see external_url_table below).
+    env_id = uuid.uuid4().hex[:10]
+    ws_name = _workspace_name_from_label(name) or env_id
+
     # Multi-repo: resolve + upload each non-odoo component's env, so the
     # workspace can boot them alongside odoo. {"components": [], ...} for a
     # legacy profile or a profile-less inline env -- the workspace then boots
@@ -290,6 +307,17 @@ def create(source_run_id: Optional[str], issue: Optional[str],
         if non_odoo:
             port_table = component_env.build_port_table(all_components)
             dependency_conn = component_env.build_dependency_conn(dependencies)
+            # Pre-built (not looked up after the fact, since the workspace
+            # doesn't exist yet): the coder_app subdomain_name format is a
+            # fixed "<slug>--<ws>--<owner>" (see _subdomain_url above), so
+            # any component with expose.port set gets a real, working URL
+            # right now, for any peer's env.overrides to reference via
+            # "$EXTERNAL_URL(<component-name>)".
+            owner = _current_coder_owner()
+            external_url_table = {
+                c["name"]: _subdomain_url(f"{c['name']}--{ws_name}--{owner}")
+                for c in all_components if (c.get("expose") or {}).get("port")
+            }
             # The shared masked DB, as env-db (this same template's local
             # postgres, hydrated from `dump`) already exposes it: published to
             # 127.0.0.1:5432 with fixed odoo/odoo creds -- see the "envnet"
@@ -308,7 +336,8 @@ def create(source_run_id: Optional[str], issue: Optional[str],
             resolved_components = []
             for c in non_odoo:
                 env_pairs = list(component_env.resolve_component_env(
-                    c, dest_conn, port_table, dependency_conn, odoo_conn).items())
+                    c, dest_conn, port_table, dependency_conn, odoo_conn,
+                    external_url_table).items())
                 env_get_url, env_keys = (
                     pipeline._upload_env_file(env_pairs) if env_pairs else ("", []))
                 built = c.get("built") or {}
@@ -331,9 +360,6 @@ def create(source_run_id: Optional[str], issue: Optional[str],
                 "components": resolved_components, "dependencies": dependencies,
             }).encode()).decode()
 
-    env_id = uuid.uuid4().hex[:10]
-    # Coder workspace name: a human-friendly label when given, else the env id.
-    ws_name = _workspace_name_from_label(name) or env_id
     store.create_environment(env_id, source_run_id, issue, dump,
                              repo_url=r_url, repo_branch=r_branch,
                              odoo_image=odoo_img, profile_id=profile_id)
