@@ -1076,8 +1076,10 @@ resource "coder_app" "component" {
   agent_id     = coder_agent.main.id
   slug         = each.key
   display_name = each.key
-  url          = "http://localhost:${each.value.expose.port}"
-  subdomain    = true
+  # expose.path is the app tile's entry point when it isn't "/" (e.g.
+  # facade's Swagger UI lives at /docs) -- optional, defaults to root.
+  url       = "http://localhost:${each.value.expose.port}${lookup(each.value.expose, "path", "")}"
+  subdomain = true
 }
 
 # Env Guide: a secret-free HTML page served from inside the workspace

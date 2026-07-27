@@ -105,10 +105,18 @@ def _validate_components(components: Any) -> list[dict[str, Any]]:
         if not c.get("repo_url") and kind != "odoo":
             raise ValueError(f"components[{i}] ({name!r}): repo_url is required")
         expose = c.get("expose")
-        if expose is not None and (not isinstance(expose, dict) or not isinstance(expose.get("port"), int)):
-            raise ValueError(
-                f"components[{i}] ({name!r}): expose must be a mapping with an "
-                f"integer port, e.g. {{port: 3000}} (got {expose!r})")
+        if expose is not None:
+            if not isinstance(expose, dict) or not isinstance(expose.get("port"), int):
+                raise ValueError(
+                    f"components[{i}] ({name!r}): expose must be a mapping with an "
+                    f"integer port, e.g. {{port: 3000}} (got {expose!r})")
+            # Optional: the app tile's entry path (e.g. facade's Swagger UI
+            # lives at /docs, not /). Defaults to "/" if omitted.
+            path = expose.get("path")
+            if path is not None and not isinstance(path, str):
+                raise ValueError(
+                    f"components[{i}] ({name!r}): expose.path must be a string "
+                    f"(got {path!r})")
     return components
 
 

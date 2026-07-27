@@ -20,7 +20,9 @@
 # above: a component can need its port purely for internal peer-wiring
 # without wanting a dashboard tile (an internal-only API, a worker with no
 # HTTP surface at all). Omit `expose` entirely to keep a component
-# internal-only.
+# internal-only. Optional `expose.path` sets the tile's entry point when
+# it isn't "/" -- e.g. facade below opens straight to its Swagger UI at
+# /docs rather than its bare API root.
 
 - name: odoo
   kind: odoo
@@ -41,6 +43,7 @@
   port: 8000
   expose:
     port: 8000
+    path: /docs
   docker:
     dockerfile: Dockerfile
 
