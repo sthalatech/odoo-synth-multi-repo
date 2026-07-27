@@ -64,6 +64,12 @@ def render_caddyfile(hook_ips: str) -> str:
 
 {HOSTNAME} {{
 	encode zstd gzip
+	# Same on-demand path as the wildcard block below -- Caddy's normal
+	# proactive issuance doesn't fire for this hostname while a wildcard site
+	# sharing the same :443 listener also requests on-demand.
+	tls {{
+		on_demand
+	}}
 
 	# GitHub webhook -> odoo-synth listener (localhost only, if/when deployed).
 	# Restricted to GitHub's hook IP ranges (auto-refreshed by this script);

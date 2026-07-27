@@ -99,6 +99,15 @@ sudo tee /etc/caddy/Caddyfile >/dev/null <<CADDY
 
 ${HOSTNAME} {
 	encode zstd gzip
+	# Same on-demand path as the wildcard block below, rather than Caddy's
+	# normal proactive/automatic issuance -- observed NOT to fire for this
+	# hostname when a wildcard site sharing the same :443 listener also
+	# requests on-demand (TLS handshake failed with no cert ever obtained,
+	# no ACME attempt logged). On-demand for a single fixed hostname is
+	# still just one cert, obtained once and cached/renewed normally.
+	tls {
+		on_demand
+	}
 
 	# GitHub webhook -> odoo-synth listener (localhost only, if/when deployed
 	# by deploy/13_webhook_listener.sh). Restricted to GitHub's hook IP
