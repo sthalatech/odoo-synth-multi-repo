@@ -330,7 +330,7 @@ else
   echo
   if confirm "Provision the basic infrastructure now?"; then
     # --- 7a. ECR + base images + golden AMI + IAM + Coder server ---
-    say "7a/7c: ECR, base images, golden AMI, builder IAM, Coder server ..."
+    say "7a/7d: ECR, base images, golden AMI, builder IAM, Coder server ..."
     # Order: ECR repos -> masker+discovery images -> builder IAM ->
     #        env-instance IAM + golden AMI (09, full bake: docker+buildx+
     #        awscli baked in so profile-time workspaces do zero provisioning) ->
@@ -346,10 +346,28 @@ else
     else
       warn "a provisioning step failed (see logs above)."
       warn "fix it and re-run -- completed steps are idempotent."
-      warn "skipping Coder login + template publish for now."
+      warn "skipping HTTPS + Coder login + template publish for now."
     fi
 
-    # --- 7b. Coder login (headless first-admin + token persistence) ---
+    # --- 7b. HTTPS for the dashboard + every app tile (best-effort) ---
+    # Not part of the 7a `&&` chain on purpose: a Caddy/Let's-Encrypt hiccup
+    # here shouldn't block template publish or anything else -- everything
+    # still works over plain http://<coder-ip>:8943 in the meantime, and this
+    # is safe to retry any time (deploy/11_coder_server.sh's coder.env sync
+    # already ran as part of 7a, so PUBLIC_DOMAIN/PUBLIC_SCHEME are set).
+    if [ "$INFRA_OK" = 1 ]; then
+      echo
+      say "7b/7d: Enable HTTPS (dashboard + every app tile)"
+      if bash deploy/14_caddy_https.sh; then
+        set -a; . "$HERE/deploy/state.env"; set +a
+        ok "HTTPS enabled -- https://coder.${PUBLIC_DOMAIN:-<unset>}/"
+      else
+        warn "HTTPS setup failed (see above) -- continuing over plain http for now."
+        warn "retry any time with: bash deploy/14_caddy_https.sh"
+      fi
+    fi
+
+    # --- 7c. Coder login (headless first-admin + token persistence) ---
     # Only attempt Coder login + template publish if 7a succeeded. If the
     # chain failed (e.g. the golden AMI bake in 09_dev_env.sh died), CODER_URL
     # may still be in state.env from a prior run -- but the infra is not
@@ -357,7 +375,7 @@ else
     # The user should fix the failed step and re-run.
     if [ "$INFRA_OK" = 1 ]; then
     echo
-    say "7b/7c: Log into Coder"
+    say "7c/7d: Log into Coder"
     if [ -n "${CODER_URL:-}" ]; then
       echo "  The Coder server is up at ${BOLD}${CODER_URL}${OFF}."
       # The login logic lives in 11b_coder_login.sh so the wizard and run_all
@@ -373,7 +391,7 @@ else
       warn "CODER_URL not in deploy/state.env -- did 11_coder_server.sh run? Skipping Coder login."
     fi
 
-    # --- 7c. Publish the Coder templates (needs coder login) ---
+    # --- 7d. Publish the Coder templates (needs coder login) ---
     # This MUST run -- profile discover/build/mask shell out to `coder create
     # -t odoo-synth-discoverer` / `-t odoo-synth-masker` / `-t odoo-synth-builder`,
     # which 404 with "template not found" if that template was never published.
@@ -381,7 +399,7 @@ else
     # explicitly (and how to recover) instead of dropping the step.
     if [ -n "${CODER_URL:-}" ]; then
       echo
-      say "7c/7c: Publish Coder templates"
+      say "7d/7d: Publish Coder templates"
       if [ -z "${CODER_SESSION_TOKEN:-}" ]; then
         warn "CODER_SESSION_TOKEN is not set -- coder login did not persist a token."
         warn "The workspacer/builder/discoverer/masker templates will NOT be"
