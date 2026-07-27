@@ -337,9 +337,11 @@ def create(source_run_id: Optional[str], issue: Optional[str],
                          "user": "odoo", "password": "odoo"}
             # This workspace's own local Odoo -- a fixed target (like
             # dest_conn above), not per-profile discovered: every workspace
-            # runs Odoo on 127.0.0.1:18069 with the masker's admin/admin
-            # login reset, against this same dest_conn database.
-            odoo_conn = {"host": "127.0.0.1", "port": 18069, "scheme": "http",
+            # runs Odoo on 127.0.0.1:8069 (env-odoo now runs --network host,
+            # same as every other component, so this is its real port --
+            # no more 18069 remap) with the masker's admin/admin login
+            # reset, against this same dest_conn database.
+            odoo_conn = {"host": "127.0.0.1", "port": 8069, "scheme": "http",
                          "dbname": dest_conn["dbname"], "login": "admin",
                          "password": config.get("ODOO_ADMIN_PASSWORD", "admin")}
             resolved_components = []

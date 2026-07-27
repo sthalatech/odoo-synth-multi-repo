@@ -5,7 +5,7 @@ database, with an addons repo live-mounted for development.
 
 ## What you get
 
-- **Odoo** (image-baked addons) on `127.0.0.1:18069`, hydrated from a masked
+- **Odoo** (image-baked addons) on `127.0.0.1:8069`, hydrated from a masked
   dump into a **local Postgres 16** container (`env-db`).
 - **Your addons repo** cloned to `/home/dev/workspace/repo` and bind-mounted
   into Odoo at `/mnt/live` (read-write). Edit on the host; restart Odoo to

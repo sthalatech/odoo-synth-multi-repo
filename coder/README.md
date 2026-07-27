@@ -65,7 +65,7 @@ so the workspace isn't "ready" until Odoo answers HTTP. The agent bootstrap
 (`user_data` on the `aws_instance`) downloads the Coder agent binary and starts
 it with `CODER_AGENT_TOKEN` + `CODER_AGENT_URL`.
 
-`coder_app` resources (`odoo` → `:18069`, `vscode` → `:8443`) make both reachable
+`coder_app` resources (`odoo` → `:8069`, `vscode` → `:8443`) make both reachable
 through the Coder tunnel at
 `http://<coder-url>/@<owner>/<workspace>/apps/<slug>/`.
 

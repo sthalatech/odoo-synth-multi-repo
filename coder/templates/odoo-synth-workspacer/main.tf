@@ -328,17 +328,26 @@ resource "coder_agent" "main" {
     WORKSPACE="/home/dev/workspace"
     REPO_DIR="$WORKSPACE/repo"
     PGPASS="odoo"
-    NET="envnet"
 
     mkdir -p "$WORKSPACE"
     chown -R dev:dev /home/dev
-    docker network create "$NET" >/dev/null 2>&1 || true
 
     # --- 1. local postgres holding the masked data ---
+    # --network host, same as every other container in this workspace
+    # (facade/worker/frontend/admin-frontend/redis) -- this used to be a
+    # separate "envnet" bridge network with an explicit port-publish
+    # (-p 127.0.0.1:5432:5432) so host-network containers could still reach
+    # it. That only worked in one direction: env-odoo/env-db could never
+    # reach a *host-network-only* dependency like redis via "localhost",
+    # since their own "localhost" was their own isolated container loopback,
+    # not the host's. Confirmed directly: `docker exec env-odoo` connecting
+    # to 127.0.0.1:6379 got ConnectionRefusedError, matching Odoo's own
+    # cache_mixin logs exactly. Host networking for everything removes the
+    # asymmetry -- one shared network namespace, no publish/remap needed.
     docker rm -f env-db >/dev/null 2>&1 || true
-    docker run -d --name env-db --network "$NET" \
+    docker run -d --name env-db --network host \
       -e POSTGRES_PASSWORD="$PGPASS" -e POSTGRES_USER=odoo \
-      -e POSTGRES_DB="$DB_NAME" -p 127.0.0.1:5432:5432 \
+      -e POSTGRES_DB="$DB_NAME" \
       -v /var/lib/env-db:/var/lib/postgresql/data postgres:16
     # Wait for the *database* (not just the server) to accept connections.
     # pg_isready returns OK once postgres accepts any connection, but the
@@ -477,9 +486,14 @@ resource "coder_agent" "main" {
         MOUNT_ARGS="-v $${REPO_DIR}:/mnt/live:rw -e EXTRA_ADDONS_PATH=$EXTRA"
       fi
       docker rm -f env-odoo >/dev/null 2>&1 || true
-      docker run -d --name env-odoo --network "$NET" \
-        -p 127.0.0.1:18069:8069 \
-        -e TARGET_DB_HOST=env-db -e TARGET_DB_PORT=5432 -e TARGET_DB_NAME="$DB_NAME" \
+      # --network host (see env-db above for why): Odoo's own port (8069) is
+      # now the actual host port too -- no more 18069 remap, since a
+      # --network host container can't publish/remap ports at all (it
+      # shares the host's network stack directly). TARGET_DB_HOST is now
+      # 127.0.0.1, not the container name "env-db" -- host networking has
+      # no inter-container DNS the way the old envnet bridge did.
+      docker run -d --name env-odoo --network host \
+        -e TARGET_DB_HOST=127.0.0.1 -e TARGET_DB_PORT=5432 -e TARGET_DB_NAME="$DB_NAME" \
         -e TARGET_DB_USER=odoo -e TARGET_DB_PASSWORD="$PGPASS" \
         -e ODOO_MASTER_PASSWORD="$ODOO_MASTER_PASSWORD" \
         -e ODOO_CONF_EXTRA_B64="$ODOO_CONF_EXTRA_B64" \
@@ -534,8 +548,9 @@ PY
     # profile -- the python3 step below then writes zero manifest lines and
     # this whole block is a no-op, same as before multi-repo support existed.
     # All components here run --network host (like every other odoo-synth
-    # Coder template) so they reach env-db (published at 127.0.0.1:5432) and
-    # each other via plain localhost:<port> -- lib/backend/component_env.py
+    # Coder template, and now env-odoo/env-db themselves too) so they reach
+    # env-db (bound directly to 127.0.0.1:5432, same host network namespace)
+    # and each other via plain localhost:<port> -- lib/backend/component_env.py
     # already resolved every wired env var to that same convention.
     COMPDIR="/tmp/components"; mkdir -p "$COMPDIR"
     echo "$COMPONENTS_JSON" | base64 -d > "$COMPDIR/components.json" 2>/dev/null || true
@@ -776,7 +791,7 @@ PYEOF
 <h2>Containers (docker)</h2>
 <table>
 <tr><th>name</th><th>purpose</th><th>host port</th></tr>
-<tr><td><code>env-odoo</code></td><td>Odoo server (image-baked addons)</td><td>127.0.0.1:18069 &rarr; 8069</td></tr>
+<tr><td><code>env-odoo</code></td><td>Odoo server (image-baked addons)</td><td>127.0.0.1:8069</td></tr>
 <tr><td><code>env-db</code></td><td>local Postgres 16 (hydrated from masked dump)</td><td>127.0.0.1:5432</td></tr>
 </table>
 
@@ -895,7 +910,7 @@ EISVC
 
 ## Where things are
 - Addons repo (your working copy): /home/dev/workspace/repo , bind-mounted into Odoo at /mnt/live .
-- Odoo runs in the env-odoo docker container (host port 127.0.0.1:18069).
+- Odoo runs in the env-odoo docker container (host port 127.0.0.1:8069).
 - Postgres runs in the env-db container (host 127.0.0.1:5432, user/db odoo, password odoo).
 - Boot log: /var/log/odoo-synth-workspacer.log .
 - Env Guide page: http://localhost:8090/ (the Env Guide app on the workspace page).
@@ -1024,7 +1039,7 @@ resource "coder_script" "odoo_readiness" {
     ODOO_IMAGE="${data.coder_parameter.odoo_image.value}"
     if [ -n "$ODOO_IMAGE" ]; then
       for _ in $(seq 1 72); do
-        code="$(curl -s -o /dev/null -w '%%{http_code}' --max-time 5 http://127.0.0.1:18069/web/login 2>/dev/null || echo 000)"
+        code="$(curl -s -o /dev/null -w '%%{http_code}' --max-time 5 http://127.0.0.1:8069/web/login 2>/dev/null || echo 000)"
         case "$code" in 200|301|302|303) echo "[env] odoo ready (http $code)"; exit 0 ;; esac
         sleep 10
       done
@@ -1091,10 +1106,10 @@ resource "coder_app" "odoo" {
   slug         = "odoo"
   display_name = "Odoo (masked)"
   icon         = "/icon/odoo.svg"
-  url          = "http://localhost:18069"
+  url          = "http://localhost:8069"
   subdomain    = true
   healthcheck {
-    url       = "http://localhost:18069/web/health"
+    url       = "http://localhost:8069/web/health"
     interval  = 10
     threshold = 3
   }

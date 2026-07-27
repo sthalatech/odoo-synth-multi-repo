@@ -196,7 +196,7 @@ def _build_task(issue_ref: str, title: str, url: str, body: str,
         /home/dev/workspace/AGENT_CONTEXT.md and /home/dev/workspace/repo/AGENT.md
         (if it exists) in your cwd. They contain the project system prompt, the
         commit/push/PR mandate, the browser guidance, and the env layout
-        (Odoo on 127.0.0.1:18069, repo at /home/dev/workspace/repo). Do NOT skip
+        (Odoo on 127.0.0.1:8069, repo at /home/dev/workspace/repo). Do NOT skip
         this and do NOT rely solely on the superpowers brainstorming checklist --
         that checklist ends at "transition to implementation" and does NOT include
         finishing the branch, so the finish steps below are part of YOUR task.
@@ -212,9 +212,9 @@ def _build_task(issue_ref: str, title: str, url: str, body: str,
            DBUS_SESSION_BUS_ADDRESS makes Chrome block on a D-Bus connection,
            and Odoo's /web/login redirect chain never fires a load event so
            Chrome waits indefinitely). The wrappers fix both:
-             chrome-dom http://127.0.0.1:18069/web/login        # render page -> HTML on stdout
+             chrome-dom http://127.0.0.1:8069/web/login        # render page -> HTML on stdout
              chrome-shot /home/dev/workspace/repo/docs/issue-{issue_ref}-after.png \
-               http://127.0.0.1:18069/<your-route>              # capture a PNG screenshot
+               http://127.0.0.1:8069/<your-route>              # capture a PNG screenshot
            (full-page/tall: append `--window-size=1280,2400` as a trailing flag.)
            Save the screenshot under the repo (e.g.
            /home/dev/workspace/repo/docs/issue-{issue_ref}-after.png) and

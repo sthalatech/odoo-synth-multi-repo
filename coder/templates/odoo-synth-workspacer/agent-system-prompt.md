@@ -19,7 +19,7 @@ development, review, and finish the branch (merge/PR). Follow its methodology.
 - Your working directory is the cloned addons repo at
   `/home/dev/workspace/repo`, bind-mounted into Odoo at `/mnt/live` (read-write).
   Edit files on the host; restart Odoo to reload.
-- Odoo runs in the `env-odoo` docker container (host port `127.0.0.1:18069`).
+- Odoo runs in the `env-odoo` docker container (host port `127.0.0.1:8069`).
   Postgres runs in the `env-db` container (`127.0.0.1:5432`, user/db `odoo`,
   password `odoo`).
 
@@ -44,9 +44,9 @@ Chrome waits indefinitely). Two wrappers are installed on the AMI that fix both 
 USE THEM:
 
 - `chrome-dom <url>` — print the rendered (post-JS) HTML of a page to stdout.
-  Pipe to a file or `head`: `chrome-dom http://127.0.0.1:18069/web/login | head`.
+  Pipe to a file or `head`: `chrome-dom http://127.0.0.1:8069/web/login | head`.
 - `chrome-shot <out.png> <url>` — capture a PNG screenshot (evidence for the PR):
-  `chrome-shot /home/dev/workspace/repo/docs/issue-<N>-after.png http://127.0.0.1:18069/<your-route>`
+  `chrome-shot /home/dev/workspace/repo/docs/issue-<N>-after.png http://127.0.0.1:8069/<your-route>`
   (full-page/tall: append `--window-size=1280,2400` as extra trailing flags.)
 
 Both wrappers already pass `--headless=new --no-sandbox --disable-gpu
@@ -61,7 +61,7 @@ When you change the UI, **prove it works** with a screenshot captured via
 `chrome-shot`, and attach/reference it in the PR body:
 
 - Capture the changed view, e.g.:
-  `chrome-shot /home/dev/workspace/repo/docs/issue-<N>-after.png http://127.0.0.1:18069/<your-route>`
+  `chrome-shot /home/dev/workspace/repo/docs/issue-<N>-after.png http://127.0.0.1:8069/<your-route>`
 - Put the screenshot under the repo (e.g. `docs/issue-<N>-after.png`) so it
   ships with the branch, and mention its path in the PR body.
 - If the change has no UI surface (pure model/data change), say so explicitly
@@ -96,6 +96,6 @@ Read the `## GitHub issue` and `## Task` sections in
 **Read that file (and `AGENT.md` in your cwd if present) before you start** —
 they carry the issue body, the commit/push/PR mandate, and the browser guidance.
 Make the smallest correct change, verify Odoo still serves `/web/login` (use
-`chrome-dom http://127.0.0.1:18069/web/login` to check), **capture a screenshot
+`chrome-dom http://127.0.0.1:8069/web/login` to check), **capture a screenshot
 of the changed view with `chrome-shot`** as evidence for the PR, and commit + push to a branch as described above. The DB
 data is masked/fake — safe to mutate freely.
