@@ -73,20 +73,27 @@
     dockerfile: Dockerfile
 
 - name: frontend
-  kind: static
+  kind: process
   repo_url: https://github.com/IshaFoundationIT/prs-frontend
   repo_ref: dev
   port: 3000
   expose:
     port: 3000
-  static:
+  process:
     # Pins yarn@4.5.0 via its own package.json "packageManager" field --
     # the golden AMI has corepack enabled, which reads that and shims the
     # right yarn version. Do not assume npm: check each repo's actual
     # package.json/lockfile before wiring install/build commands.
     install_cmd: yarn install --immutable
     build_cmd: yarn build
-    publish_dir: dist
+    # `process` kind, not `static`: the repo's own package.json already
+    # defines "preview": "vite preview --port 3003" -- Vite's preview
+    # server correctly serves the production build (SPA-fallback, etc.),
+    # which a generic static-file server (what `static` kind uses) does
+    # not do on its own. Always prefer a component's own serve mechanism
+    # over approximating one -- $PORT is exported by the boot script
+    # before this runs, overriding the repo's own hardcoded --port.
+    start_cmd: yarn vite preview --port $PORT --host 127.0.0.1 --strictPort
 
 - name: admin-frontend
   kind: process
