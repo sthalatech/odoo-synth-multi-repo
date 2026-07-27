@@ -107,14 +107,21 @@ def _delete_password_secret(arn: str | None) -> None:
     except Exception:  # noqa: BLE001
         pass
 
+_IPV4_RE = re.compile(r"^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$")
+
+
 def _subdomain_url(subdomain_name: str) -> str:
     """Build the browser-reachable URL for a subdomain-hosted coder_app.
 
     CODER_URL is the Coder server origin, e.g. http://13.222.25.98:8943, and
-    CODER_WILDCARD_ACCESS_URL on the server is "*.<same host:port>". Coder
-    exposes per-app `subdomain_name` = "<app>--<ws>--<owner>". The app origin is
-    therefore "<subdomain_name>.<host>:<port>" with the same scheme:port as
-    CODER_URL. (nip.io makes *.host resolve to host, so no real DNS needed.)
+    CODER_WILDCARD_ACCESS_URL on the server is "*.<host>.nip.io:<port>" for a
+    bare-IP CODER_URL (see 11_coder_server.sh) -- nip.io gives wildcard DNS
+    for "*.<ip>.nip.io" with no real domain needed. Coder exposes per-app
+    `subdomain_name` = "<app>--<ws>--<owner>"; the app origin is
+    "<subdomain_name>.<same suffix Coder's own wildcard uses>:<port>".
+    Only append .nip.io for a bare IP host -- a real domain is assumed to
+    already have its own wildcard DNS set up by whoever configured it that
+    way, and appending .nip.io there would be wrong.
     """
     base = config.get("CODER_URL", "").rstrip("/")
     if not base or not subdomain_name:
@@ -122,6 +129,8 @@ def _subdomain_url(subdomain_name: str) -> str:
     from urllib.parse import urlsplit
     ps = urlsplit(base)
     host, port = ps.hostname, ps.port
+    if host and _IPV4_RE.match(host):
+        host = f"{host}.nip.io"
     full_host = f"{subdomain_name}.{host}" + (f":{port}" if port else "")
     return f"{ps.scheme}://{full_host}"
 
