@@ -6,6 +6,17 @@
 # them. `kind` doubles as the URL scheme discovery matches against a
 # component's env values (e.g. BROKER_URL=redis://... -> kind: redis) when no
 # name-prefix hint is present.
+#
+# A dependency can also opt into a Coder-dashboard app tile via `expose`,
+# same shape/rules as a component's (see components.yaml) -- e.g. flower
+# below is a monitoring dashboard for the "redis" dependency's broker
+# (used by worker's Celery), not a broker itself, so it's worth a tile even
+# though it isn't a "component".
 
 - name: redis
   kind: redis
+
+- name: flower
+  kind: flower
+  expose:
+    port: 5555

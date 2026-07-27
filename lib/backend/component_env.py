@@ -33,6 +33,7 @@ _EXTERNAL_URL_RE = re.compile(r"^\$EXTERNAL_URL\(([a-z0-9-]+)\)$")
 # simply won't resolve (same "never guess" posture as everywhere else).
 DEFAULT_DEPENDENCY_PORTS = {
     "redis": 6379,
+    "flower": 5555,
 }
 
 

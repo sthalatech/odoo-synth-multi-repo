@@ -78,6 +78,37 @@ def dependencies_of(profile: dict[str, Any]) -> list[dict[str, Any]]:
     return profile.get("dependencies") or []
 
 
+def _validate_expose(expose: Any, ctx: str) -> None:
+    """Shared by components and dependencies: both can opt into a
+    Coder-dashboard app tile via the same {port, path?, share?} shape (e.g.
+    a component's own API, or a dependency-level sidecar like Celery
+    Flower riding on the same broker as a "redis" dependency)."""
+    if expose is None:
+        return
+    if not isinstance(expose, dict) or not isinstance(expose.get("port"), int):
+        raise ValueError(
+            f"{ctx}: expose must be a mapping with an integer port, "
+            f"e.g. {{port: 3000}} (got {expose!r})")
+    # Optional: the app tile's entry path (e.g. facade's Swagger UI lives
+    # at /docs, not /). Defaults to "/" if omitted.
+    path = expose.get("path")
+    if path is not None and not isinstance(path, str):
+        raise ValueError(f"{ctx}: expose.path must be a string (got {path!r})")
+    # Optional: how much Coder's own tunnel auth gate applies to this app
+    # tile, same three levels coder_app's own "share" takes. Defaults to
+    # "owner" (Coder login required for every request -- fine for a human
+    # opening a UI in their own browser, but wrong for a component another
+    # exposed component's browser-side JS calls directly: a CORS preflight
+    # never carries the session cookie, so Coder's gate 303-redirects it
+    # and the browser rejects the redirected preflight outright. "public"
+    # hands auth entirely to the target's own app-level check instead.)
+    share = expose.get("share", "owner")
+    if share not in ("owner", "authenticated", "public"):
+        raise ValueError(
+            f"{ctx}: expose.share must be one of owner/authenticated/public "
+            f"(got {share!r})")
+
+
 def _validate_components(components: Any) -> list[dict[str, Any]]:
     """Fail fast on malformed component lists at create/update time, rather
     than deep inside discover/build/env-create much later. Deliberately
@@ -104,33 +135,7 @@ def _validate_components(components: Any) -> list[dict[str, Any]]:
                 f"{KNOWN_COMPONENT_KINDS} (got {kind!r})")
         if not c.get("repo_url") and kind != "odoo":
             raise ValueError(f"components[{i}] ({name!r}): repo_url is required")
-        expose = c.get("expose")
-        if expose is not None:
-            if not isinstance(expose, dict) or not isinstance(expose.get("port"), int):
-                raise ValueError(
-                    f"components[{i}] ({name!r}): expose must be a mapping with an "
-                    f"integer port, e.g. {{port: 3000}} (got {expose!r})")
-            # Optional: the app tile's entry path (e.g. facade's Swagger UI
-            # lives at /docs, not /). Defaults to "/" if omitted.
-            path = expose.get("path")
-            if path is not None and not isinstance(path, str):
-                raise ValueError(
-                    f"components[{i}] ({name!r}): expose.path must be a string "
-                    f"(got {path!r})")
-            # Optional: how much Coder's own tunnel auth gate applies to this
-            # app tile, same three levels coder_app's own "share" takes.
-            # Defaults to "owner" (Coder login required for every request --
-            # fine for a human opening a UI in their own browser, but wrong
-            # for a component another exposed component's browser-side JS
-            # calls directly: a CORS preflight never carries the session
-            # cookie, so Coder's gate 303-redirects it and the browser
-            # rejects the redirected preflight outright. "public" hands auth
-            # entirely to the component's own app-level check instead.)
-            share = expose.get("share", "owner")
-            if share not in ("owner", "authenticated", "public"):
-                raise ValueError(
-                    f"components[{i}] ({name!r}): expose.share must be one of "
-                    f"owner/authenticated/public (got {share!r})")
+        _validate_expose(c.get("expose"), f"components[{i}] ({name!r})")
     return components
 
 
@@ -140,6 +145,7 @@ def _validate_dependencies(dependencies: Any) -> list[dict[str, Any]]:
     for i, d in enumerate(dependencies):
         if not isinstance(d, dict) or not d.get("name") or not d.get("kind"):
             raise ValueError(f"dependencies[{i}] must have name + kind")
+        _validate_expose(d.get("expose"), f"dependencies[{i}] ({d.get('name')!r})")
     return dependencies
 
 
