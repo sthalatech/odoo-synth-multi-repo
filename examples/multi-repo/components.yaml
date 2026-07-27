@@ -21,8 +21,9 @@
 # without wanting a dashboard tile (an internal-only API, a worker with no
 # HTTP surface at all). Omit `expose` entirely to keep a component
 # internal-only. Optional `expose.path` sets the tile's entry point when
-# it isn't "/" -- e.g. facade below opens straight to its Swagger UI at
-# /docs rather than its bare API root.
+# it isn't "/" -- e.g. a service whose real entry point is a docs page or
+# an admin path rather than its bare root. None of the components below
+# currently need it (their root path is what a developer actually wants).
 #
 # `expose.share` (owner/authenticated/public, default owner) controls how
 # much of Coder's OWN tunnel auth gate applies. "owner" (the default) is
@@ -53,7 +54,6 @@
   port: 8000
   expose:
     port: 8000
-    path: /docs
     share: public
   docker:
     dockerfile: Dockerfile
