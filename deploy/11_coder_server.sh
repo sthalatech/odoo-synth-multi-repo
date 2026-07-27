@@ -206,7 +206,7 @@ PUBLIC_SCHEME="__PUBLIC_SCHEME__"
 PUBLIC_DOMAIN_OVERRIDE="__PUBLIC_DOMAIN_OR_EMPTY__"
 if [ "$PUBLIC_SCHEME" = "https" ] && [ -n "$PUBLIC_DOMAIN_OVERRIDE" ]; then
   ACCESS_URL="https://coder.${PUBLIC_DOMAIN_OVERRIDE}"
-  WILDCARD_URL="https://*.${PUBLIC_DOMAIN_OVERRIDE}"
+  WILDCARD_URL="*.${PUBLIC_DOMAIN_OVERRIDE}"
 else
   ACCESS_URL="http://${MYIP}:8943"
   WILDCARD_URL="*.${MYIP}.nip.io:8943"
@@ -316,7 +316,10 @@ if [ "$WAS_REUSED" = 1 ] && [ "$NO_SYNC" != 1 ]; then
   AZ="$(instance_az "$I_ID")"
   if [ "$PUBLIC_SCHEME" = "https" ]; then
     WANT_ACCESS_URL="https://coder.${PUBLIC_DOMAIN}"
-    WANT_WILDCARD_URL="https://*.${PUBLIC_DOMAIN}"
+    # NO scheme here -- CODER_WILDCARD_ACCESS_URL is a bare hostname pattern;
+    # Coder rejects one with "hostname pattern must not contain a scheme" and
+    # crash-loops. Scheme comes from CODER_ACCESS_URL alone.
+    WANT_WILDCARD_URL="*.${PUBLIC_DOMAIN}"
   else
     WANT_ACCESS_URL="http://${CODER_IP}:${CODER_PORT}"
     WANT_WILDCARD_URL="*.${PUBLIC_DOMAIN}:${CODER_PORT}"
