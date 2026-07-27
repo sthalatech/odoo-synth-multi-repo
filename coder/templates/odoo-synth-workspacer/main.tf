@@ -277,14 +277,15 @@ locals {
 
   # Multi-repo components to expose through the Coder tunnel: same
   # components_json the boot script already decodes, read here in Terraform
-  # itself so each component with an assigned port gets its own coder_app
-  # (see resource "coder_app" "component" below). A component with no port
-  # (a pure worker, say) has nothing to expose and is skipped -- never a
-  # hardcoded name/count, this reflects whatever the profile actually has.
+  # itself. Exposure is an explicit opt-in per component (profile's
+  # component.expose = {port: N}), deliberately NOT implied by merely
+  # having a port -- a component can need a port for internal peer-wiring
+  # (--network host binding, another component's PEER_HOST/PEER_PORT)
+  # without wanting a dashboard app tile, e.g. an internal-only API.
   components_decoded = try(jsondecode(base64decode(data.coder_parameter.components_json.value)), { components = [] })
   exposed_components = {
     for c in try(local.components_decoded.components, []) : c.name => c
-    if try(c.port, null) != null
+    if try(c.expose.port, null) != null
   }
 }
 
@@ -1063,20 +1064,19 @@ resource "coder_app" "odoo" {
   }
 }
 
-# One app per multi-repo component that has a port (facade, frontend,
-# admin-frontend, ... whatever this profile actually declares) -- same
-# subdomain-proxied, tunnel-only exposure as Odoo above, so nothing needs an
-# inbound SG rule or public IP. No healthcheck: unlike Odoo's dedicated
-# /web/health endpoint, a component's own root path may legitimately answer
-# with a non-2xx (an API requiring auth, a redirect to a login page, ...),
-# so asserting health here would just be guessing at semantics this
-# template doesn't know.
+# One app per multi-repo component with expose.port set (whatever this
+# profile actually declares) -- same subdomain-proxied, tunnel-only exposure
+# as Odoo above, so nothing needs an inbound SG rule or public IP. No
+# healthcheck: unlike Odoo's dedicated /web/health endpoint, a component's
+# own root path may legitimately answer with a non-2xx (an API requiring
+# auth, a redirect to a login page, ...), so asserting health here would
+# just be guessing at semantics this template doesn't know.
 resource "coder_app" "component" {
   for_each     = local.exposed_components
   agent_id     = coder_agent.main.id
   slug         = each.key
   display_name = each.key
-  url          = "http://localhost:${each.value.port}"
+  url          = "http://localhost:${each.value.expose.port}"
   subdomain    = true
 }
 

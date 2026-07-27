@@ -13,6 +13,14 @@
 # .env.example, .env.template, env.sample, .env, .env.local, .env.development,
 # .env.test) against each repo at its pinned ref. Set `env.from_repo`
 # explicitly only if a repo's real file doesn't match any of those.
+#
+# `expose: {port: N}` opts a component into a Coder-dashboard app tile
+# (subdomain-proxied through the authenticated tunnel, same as Odoo's own
+# app -- never a public/inbound port). Deliberately separate from `port`
+# above: a component can need its port purely for internal peer-wiring
+# without wanting a dashboard tile (an internal-only API, a worker with no
+# HTTP surface at all). Omit `expose` entirely to keep a component
+# internal-only.
 
 - name: odoo
   kind: odoo
@@ -31,6 +39,8 @@
   repo_url: https://github.com/IshaFoundationIT/prs-facade
   repo_ref: uat
   port: 8000
+  expose:
+    port: 8000
   docker:
     dockerfile: Dockerfile
 
@@ -47,6 +57,8 @@
   repo_url: https://github.com/IshaFoundationIT/prs-frontend
   repo_ref: dev
   port: 3000
+  expose:
+    port: 3000
   static:
     # Pins yarn@4.5.0 via its own package.json "packageManager" field --
     # the golden AMI has corepack enabled, which reads that and shims the
@@ -61,6 +73,8 @@
   repo_url: https://github.com/IshaFoundationIT/irs-admin-frontend
   repo_ref: dev
   port: 9000
+  expose:
+    port: 9000
   process:
     # Pins pnpm@10.30.1 via package.json's "packageManager" field, same
     # corepack mechanism as frontend's yarn above.

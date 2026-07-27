@@ -320,6 +320,12 @@ def create(source_run_id: Optional[str], issue: Optional[str],
                     "docker": c.get("docker") or {}, "process": c.get("process") or {},
                     "static": c.get("static") or {},
                     "env_get_url": env_get_url, "env_keys": env_keys,
+                    # Explicit opt-in to Coder-tunnel exposure (see
+                    # profiles._validate_components) -- deliberately NOT
+                    # derived from "port" above, since a component can need
+                    # a port for internal peer-wiring without wanting a
+                    # dashboard app tile (an internal-only API, say).
+                    "expose": c.get("expose"),
                 })
             components_json = base64.b64encode(json.dumps({
                 "components": resolved_components, "dependencies": dependencies,
