@@ -96,7 +96,11 @@ echo "  + the builder/Coder IAM roles (those roles get the data-plane perms). Th
 echo "  quickest path is to attach the AWS-managed ${BOLD}PowerUserAccess${OFF} policy to"
 echo "  your IAM user. For a locked-down key, these actions are enough:"
 echo
-echo "  ${DIM}ec2:*                 SG, run/terminate/describe instances, create-image${OFF}"
+echo "  ${DIM}ec2:*                 SG, run/terminate/describe instances, create-image,${OFF}"
+echo "  ${DIM}    elastic IPs (pins the Coder server's address across restarts)${OFF}"
+echo "  ${DIM}ec2-instance-connect:SendSSHPublicKey  -- the Coder server has no${OFF}"
+echo "  ${DIM}    persisted keypair; this is how deploy/11_coder_server.sh and${OFF}"
+echo "  ${DIM}    deploy/14_caddy_https.sh reach it over SSH${OFF}"
 echo "  ${DIM}ecr:CreateRepository, DescribeRepositories, GetAuthorizationToken,${OFF}"
 echo "  ${DIM}    BatchGetImage, PutImage, *LayerUpload${OFF}"
 echo "  ${DIM}iam:CreateRole, GetRole, PutRolePolicy, CreateInstanceProfile,${OFF}"
