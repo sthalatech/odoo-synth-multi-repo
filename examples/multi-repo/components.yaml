@@ -97,7 +97,7 @@
     # operator-controlled build_cmd -- not a new mechanism, since this is a
     # one-off gap specific to this repo's config, not a generic problem
     # worth a dedicated schema field for.
-    build_cmd: sed -i "s/server: {/preview: { allowedHosts: true }, server: {/" vite.config.ts && yarn build
+    build_cmd: 'sed -i "s/server: {/preview: { allowedHosts: true }, server: {/" vite.config.ts && yarn build'
     # `process` kind, not `static`: Vite's preview server correctly serves
     # the production build (SPA-fallback, etc.), which a generic static-file
     # server (what `static` kind uses) does not do on its own. Always prefer
